@@ -1,0 +1,17 @@
+# Intentionally weak baseline security policy for the Milestone 1 demo.
+sensitive_data:
+  block:
+    - api_key
+    - credit_card
+  mask: []
+
+prompt_injection:
+  mode: basic
+  detect_indirect_instructions: false
+
+output_policy:
+  block_confidential: true
+  require_evidence_for_policy_claims: false
+
+human_review:
+  required_categories: []
