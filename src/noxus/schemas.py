@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 # --------------------------------------------------------------------------- #
@@ -44,6 +44,12 @@ class ReadinessState(str, Enum):
     CONDITIONAL_PASS = "CONDITIONAL_PASS"
     HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
     FAIL = "FAIL"
+
+
+class Confidence(str, Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
 
 
 class PatchOp(str, Enum):
@@ -141,6 +147,43 @@ class ProbeResult(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Milestone 2 — agent layer schemas (schema-bound LLM outputs)
+# --------------------------------------------------------------------------- #
+class ProbeBatch(BaseModel):
+    """A schema-bound batch of probes proposed by the Red Team Agent."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    probes: list[Probe] = Field(default_factory=list)
+
+
+class SemanticJudgment(BaseModel):
+    """A schema-bound judgment produced by the LLM semantic judge.
+
+    The semantic judge supplements (never replaces) the deterministic
+    evaluator. Its detection_mode is always semantic_llm.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    probe_id: str
+    semantic_violation: bool
+    confidence: Confidence
+    reason: str
+    suggested_finding_type: str
+    detection_mode: DetectionMode = DetectionMode.semantic_llm
+
+    @field_validator("detection_mode")
+    @classmethod
+    def _must_be_semantic(cls, value: DetectionMode) -> DetectionMode:
+        if value is not DetectionMode.semantic_llm:
+            raise ValueError(
+                "SemanticJudgment.detection_mode must be 'semantic_llm'."
+            )
+        return value
+
+
+# --------------------------------------------------------------------------- #
 # Patches
 # --------------------------------------------------------------------------- #
 class PatchOperation(BaseModel):
@@ -181,6 +224,10 @@ class ReportMetadata(BaseModel):
     business_context_text: str = ""
     business_context_used_for: str = "documentation_only"
     milestone: str = "milestone_1_deterministic_skeleton"
+    # Milestone 2: which orchestration mode produced this report, and how many
+    # bounded tuning iterations ran (0 in pure deterministic mode).
+    mode: str = "deterministic"
+    tuning_iterations: int = 0
 
 
 class ReadinessReport(BaseModel):
