@@ -49,12 +49,25 @@ def test_format_readiness_badge_conditional_pass_is_amber():
     assert badge["is_pass"] is False
     # PASS is never how CONDITIONAL_PASS is displayed.
     assert badge["label"] == "CONDITIONAL_PASS"
+    assert (
+        badge["headline"]
+        == "CONDITIONAL_PASS — improved, but human review still required"
+    )
+    assert "unresolved proprietary-context exposure" in badge["explanation"]
+    assert "fake PASS" in badge["explanation"]
 
 
 def test_open_risk_model_preserves_proprietary_context_exposure():
     model = ui_formatters.build_evidence_report_model(_deterministic_report())
     assert model["proprietary_context_exposure_unresolved"] is True
     assert any("proprietary_context_exposure" in r for r in model["open_risks"])
+    assert any(
+        "proprietary_context_exposure" in r
+        for r in model["proprietary_open_risks"]
+    )
+    assert "CONDITIONAL_PASS, not fake PASS" in model[
+        "proprietary_context_explanation"
+    ]
 
 
 def test_safety_rail_preview_extracts_critical_section():
@@ -77,6 +90,8 @@ def test_red_blue_dashboard_model_has_probe_and_patch_sides():
     model = ui_formatters.build_red_blue_dashboard_model(_deterministic_report())
     assert "red" in model and "blue" in model
     assert model["red"]["probes"], "red side must list probes"
+    assert model["red"]["baseline_probes"], "baseline probes must stay visible"
+    assert model["red"]["retest_probes"], "retest probes must stay visible"
     assert model["blue"]["patches"], "blue side must list patch operations"
     # Deterministic run inserts a safety rail; its preview must be the REAL
     # patched-prompt section, including the real clause text — not a placeholder.
@@ -90,6 +105,8 @@ def test_evidence_report_model_surfaces_open_risks():
     model = ui_formatters.build_evidence_report_model(_deterministic_report())
     assert model["open_risks"]
     assert model["readiness"]["color"] == "amber"  # CONDITIONAL_PASS, honest
+    assert model["before_findings"], "before-state failures must remain visible"
+    assert model["after_findings"], "retest open findings must remain visible"
 
 
 def test_iteration_timeline_uses_structured_snapshots_or_report_data():
@@ -103,6 +120,49 @@ def test_iteration_timeline_uses_structured_snapshots_or_report_data():
     assert before["total_probes"] == len(report.before_results)
     assert after["total_probes"] == len(report.after_results)
     assert after["readiness_state"] == report.readiness_state.value
+
+
+def test_demo_timeline_uses_real_report_counts():
+    report = _deterministic_report()
+    timeline = ui_formatters.build_demo_timeline_model(report)
+    assert [step["label"] for step in timeline] == [
+        "Baseline probes",
+        "Findings",
+        "Structured patch proposal",
+        "Deterministic patch application",
+        "Retest",
+        "Final readiness",
+    ]
+    baseline = timeline[0]
+    patching = timeline[3]
+    final = timeline[-1]
+    assert baseline["evidence_count"] == sum(
+        len(r.findings) for r in report.before_results
+    )
+    assert patching["evidence_count"] == len(report.patch_operations_applied)
+    assert final["status"] == ReadinessState.CONDITIONAL_PASS.value
+    assert final["status_color"] == "amber"
+
+
+def test_readiness_summary_model_keeps_conditional_pass_honest():
+    report = _deterministic_report()
+    model = ui_formatters.build_readiness_summary_model(report)
+    assert model["badge"]["state"] == "CONDITIONAL_PASS"
+    assert model["badge"]["color"] == "amber"
+    assert model["score_delta"] == report.after_score - report.before_score
+    assert model["open_risk_count"] == len(report.open_risks)
+    assert model["proprietary_context_exposure_unresolved"] is True
+
+
+def test_engineering_safeguards_model_surfaces_trust_boundaries():
+    safeguards = ui_formatters.build_engineering_safeguards_model()
+    titles = {item["title"] for item in safeguards}
+    assert "Schema-bound outputs" in titles
+    assert "Deterministic enforcement" in titles
+    assert "AST scope guards" in titles
+    assert "Non-root Docker runtime" in titles
+    assert "Local-only JSONL export" in titles
+    assert all(item["detail"] for item in safeguards)
 
 
 def test_finding_row_includes_confidence_for_semantic_findings():

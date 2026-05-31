@@ -14,7 +14,7 @@ products. It is a repeatable way to validate and tune prompt/policy security
 *before* production, with honest results.
 
 All four engineering milestones are complete and accepted (deterministic
-skeleton → agent layer → demo UI → container packaging), backed by **89 passing
+skeleton → agent layer → demo UI → container packaging), backed by **91+ passing
 tests**.
 
 | Layer                    | Status       |
@@ -100,7 +100,7 @@ export NOXUS_TUNING_MODEL="gemini-3.1-pro-preview"
 
 ### Evidence-driven engineering summary
 
-- **89 passing tests**, including **35 Milestone 1 deterministic/regression tests**.
+- **91+ passing tests**, including **35 Milestone 1 deterministic/regression tests**.
 - **Schema-bound Pydantic v2 contracts** for every LLM output (one bounded repair
   attempt; on failure → `SchemaContractError` → `HUMAN_REVIEW_REQUIRED`).
 - **AST/static scope guard** that blocks forbidden cloud/provider imports and keeps
@@ -280,7 +280,7 @@ forbidden out-of-scope module or dependency (e.g. `vertexai`, `google.cloud`,
 
 Milestone 3 adds a **presentation layer only**. It does not change any core
 behavior: the deterministic evaluator, the agents, the patch engine, and the
-orchestrator are all unchanged. It adds a minimal local Streamlit demo plus
+orchestrator are all unchanged. It adds a full-width local Streamlit demo plus
 pure-Python formatting helpers so a reviewer can understand the
 attack → evaluate → patch → retest loop at a glance.
 
@@ -293,7 +293,7 @@ streamlit run src/noxus/ui_streamlit.py
 
 The UI lets you pick a mode, edit the target system prompt / security policy
 YAML / business context, run an assessment, and view the iteration timeline, a
-red/blue dashboard, and an evidence report.
+Red Team / Blue Team cockpit, and an evidence report.
 
 - **Deterministic Mode** (default) reproduces Milestone 1/2 deterministic
   behavior and needs **no model credentials**.
@@ -301,6 +301,21 @@ red/blue dashboard, and an evidence report.
   (`NOXUS_LLM_BASE_URL`, `NOXUS_LLM_API_KEY`, and the `NOXUS_*_MODEL` names). If
   those env vars are missing, the UI shows a clear warning and does **not** crash
   or wipe your edits.
+
+### Manual UI smoke checklist
+
+Use this short screen-recording pass before judging or demo submission:
+
+- Open the Streamlit UI with `streamlit run src/noxus/ui_streamlit.py`.
+- Confirm the pre-run **Ready to run** panel shows the three-step loop (baseline
+  probes → structured remediation → retest and report open risks).
+- Keep **Deterministic Mode** selected in the segmented control and click **Run Assessment**.
+- Confirm `[DETERMINISTIC SIMULATION]` is visible in the Red Team / evidence views.
+- Confirm `[CRITICAL_SAFETY_RAILS]` is visible in the Blue Team safety-rail preview.
+- Confirm the final readiness card shows `CONDITIONAL_PASS`, not `PASS`.
+- Confirm proprietary-context exposure appears under **Open Risks / Human Review**.
+- Edit an input, click **Run Assessment**, and confirm the edit survives rerun.
+- Confirm there is no fake `PASS` and no hidden open-risk state.
 
 ### Honest presentation guarantees
 
