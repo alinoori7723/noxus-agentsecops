@@ -1,0 +1,39 @@
+# Version control / metadata
+.git/
+.gitignore
+
+# Virtual environments
+.venv/
+venv/
+
+# Python caches / build artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Local run outputs / audit exports / logs
+outputs/
+reports/
+tmp/
+*.log
+
+# Tests are not needed in the runtime image
+tests/
+
+# Local environment files
+.env
+.env.*
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

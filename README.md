@@ -221,3 +221,90 @@ red/blue dashboard, and an evidence report.
   survive Streamlit reruns (including clicking *Run Assessment*).
 - Tests never start a Streamlit server or a browser — only the pure formatters
   and the static import boundaries are tested.
+
+## Milestone 4 — packaging & container readiness
+
+Milestone 4 is **packaging and infrastructure-readiness only** — it changes no
+product logic. It adds a Docker image, a `.dockerignore`, and an optional,
+**opt-in, local-file-only** JSONL audit export.
+
+> Noxus is a pre-production readiness tester — **not a runtime firewall** and
+> **not a compliance certification engine**. No cloud SDKs (BigQuery, Cloud
+> Storage, Vertex, etc.) are included; the audit export is plain local NDJSON.
+
+### Build & run the container
+
+```bash
+docker build -t noxus-agentsecops:local .
+
+# Start the local Streamlit demo UI (default command):
+docker run --rm -p 8501:8501 \
+  -e NOXUS_STREAMLIT_PORT=8501 \
+  noxus-agentsecops:local
+```
+
+Override the Streamlit port:
+
+```bash
+docker run --rm -p 9000:9000 -e NOXUS_STREAMLIT_PORT=9000 noxus-agentsecops:local
+```
+
+Pass LLM env vars for agent-assisted mode (deterministic mode needs none):
+
+```bash
+docker run --rm -p 8501:8501 \
+  -e NOXUS_LLM_BASE_URL=http://host.docker.internal:4000/v1 \
+  -e NOXUS_LLM_API_KEY=sk-local \
+  -e NOXUS_RED_MODEL=gemini-3.5-flash \
+  -e NOXUS_JUDGE_MODEL=gemini-3.5-flash \
+  -e NOXUS_TUNING_MODEL=gemini-3.1-pro-preview \
+  noxus-agentsecops:local
+```
+
+Run the deterministic CLI inside the container (command override):
+
+```bash
+docker run --rm noxus-agentsecops:local \
+  noxus run --mode deterministic \
+    --system-prompt src/noxus/samples/system_prompt.txt \
+    --policy src/noxus/samples/security_policy.yaml \
+    --business-context src/noxus/samples/business_context.md
+```
+
+The image is based on `python:3.11-slim`, runs as the non-root user
+`noxus_user`, sets `PYTHONDONTWRITEBYTECODE=1` / `PYTHONUNBUFFERED=1`, and copies
+only `pyproject.toml`, `README.md`, and `src/`. `.dockerignore` keeps
+`.git/`, `.venv/`, caches, `outputs/`, `reports/`, `tmp/`, `*.log`, `.env*`, and
+`tests/` out of the image (while keeping `src/`, `pyproject.toml`, `README.md`,
+and the sample files).
+
+### Optional local JSONL audit export (opt-in)
+
+Audit export is **off by default** — no file is written unless you explicitly
+pass the flag. It is local-file only and cloud-agnostic (no BigQuery, no Cloud
+SDK, no network sink).
+
+```bash
+mkdir -p outputs/audit
+PYTHONPATH=src python3 -m noxus.cli run \
+  --mode deterministic \
+  --system-prompt src/noxus/samples/system_prompt.txt \
+  --policy src/noxus/samples/security_policy.yaml \
+  --business-context src/noxus/samples/business_context.md \
+  --audit-jsonl-output outputs/audit/readiness_reports.jsonl
+```
+
+This appends (never overwrites) one JSON line per run. Each line has stable
+top-level fields (`schema_version`, `exported_at_utc`, `readiness_state`,
+`before_score`, `after_score`, `probe_count`, `finding_count`,
+`open_risk_count`) plus the full `report` object — valid newline-delimited JSON
+suitable for downstream ingestion. You can also call it as a library:
+
+```python
+from noxus.audit_export import append_audit_jsonl
+append_audit_jsonl(report, "outputs/audit/readiness_reports.jsonl")
+```
+
+Docker builds are documented and manually runnable; the automated tests validate
+the Dockerfile/.dockerignore **statically** and never require Docker, a network,
+cloud credentials, or a running Streamlit server.

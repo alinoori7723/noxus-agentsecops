@@ -13,6 +13,7 @@ import os
 import sys
 from typing import Callable, Optional
 
+from .audit_export import append_audit_jsonl
 from .llm_provider import LLMProvider, LiteLLMProvider, ProviderError
 from .orchestrator import run_readiness_assessment
 from .policy_loader import load_text_file, load_yaml_policy, validate_policy
@@ -75,6 +76,14 @@ def _build_parser() -> argparse.ArgumentParser:
         default="deterministic",
         help="Execution mode (default: deterministic).",
     )
+    run.add_argument(
+        "--audit-jsonl-output",
+        default=None,
+        help=(
+            "Optional local file path. When provided, append the final "
+            "ReadinessReport as one JSON line. Default: no audit file is written."
+        ),
+    )
     return parser
 
 
@@ -126,6 +135,15 @@ def main(
         return 1
 
     print(render_cli_report(report))
+
+    # Opt-in only: write the audit JSONL line solely when the flag is provided.
+    if getattr(args, "audit_jsonl_output", None):
+        try:
+            path = append_audit_jsonl(report, args.audit_jsonl_output)
+        except Exception as exc:
+            print(f"ERROR: failed to write audit JSONL: {exc}", file=sys.stderr)
+            return 1
+        print(f"Audit record appended to {path}")
     return 0
 
 

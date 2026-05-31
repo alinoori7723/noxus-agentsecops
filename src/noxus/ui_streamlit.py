@@ -15,11 +15,13 @@ from pathlib import Path
 import streamlit as st
 import yaml
 
-from . import ui_formatters
-from .cli import _build_provider_from_env, _models_from_env
-from .llm_provider import ProviderError
-from .orchestrator import run_readiness_assessment
-from .policy_loader import validate_policy
+# Absolute imports so `streamlit run src/noxus/ui_streamlit.py` works (Streamlit
+# executes this file as a script, where relative imports are unavailable).
+from noxus import ui_formatters
+from noxus.cli import _build_provider_from_env, _models_from_env
+from noxus.llm_provider import ProviderError
+from noxus.orchestrator import run_readiness_assessment
+from noxus.policy_loader import validate_policy
 
 _SAMPLES = Path(__file__).resolve().parent / "samples"
 

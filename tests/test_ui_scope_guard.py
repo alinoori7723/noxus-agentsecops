@@ -43,6 +43,8 @@ FORBIDDEN_DEPENDENCIES = {
     "vertexai",
     "google-cloud",
     "google.cloud",
+    "google-cloud-bigquery",
+    "google-cloud-storage",
     "langgraph",
     "fastapi",
     "requests",
