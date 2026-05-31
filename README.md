@@ -1,12 +1,122 @@
 # Noxus AgentSecOps — AI Security Readiness Tester for LLM Apps
 
-Noxus AgentSecOps tests whether an LLM application is ready to handle adversarial
-input safely. It runs an **attack → evaluate → patch → retest** loop against a
-target app's system prompt and security policy, then produces a readiness report.
+Noxus AgentSecOps is a **pre-production AI security readiness tester**. It runs an
+autonomous **attack → evaluate → patch → retest** loop against a target LLM app's
+system prompt and security policy, then produces an **evidence-backed readiness
+report**. A deterministic core guarantees reproducibility; an optional
+schema-bound agent layer (Red Team → Semantic Judge → Policy Tuning) adds
+LLM-driven probing and tuning while a deterministic engine remains the only thing
+that ever applies a patch.
 
-This repository contains **Milestone 1**: a fully **deterministic, local Python
-skeleton**. It proves the entire loop can run end-to-end **without any LLM,
-network, or cloud dependency**.
+It is **not** a runtime firewall, a DLP replacement, a compliance certification
+engine, a production traffic gateway, or a replacement for Google security
+products. It is a repeatable way to validate and tune prompt/policy security
+*before* production, with honest results.
+
+All four engineering milestones are complete and accepted (deterministic
+skeleton → agent layer → demo UI → container packaging), backed by **89 passing
+tests**.
+
+| Layer                    | Status       |
+| ------------------------ | ------------ |
+| Deterministic evaluator  | Complete     |
+| Agent layer              | Complete     |
+| Demo UI                  | Complete     |
+| Docker packaging         | Complete     |
+| Audit export             | Local JSONL  |
+| Runtime gateway          | Out of scope |
+| Compliance certification | Out of scope |
+
+## Judge Quickstart — 3 Minute Run
+
+**A. Build the Docker image**
+
+```bash
+docker build -t noxus-agentsecops:local .
+```
+
+**B. Run the local Streamlit demo**
+
+```bash
+docker run --rm -p 8501:8501 \
+  -e NOXUS_STREAMLIT_PORT=8501 \
+  noxus-agentsecops:local
+```
+
+Then open http://localhost:8501, keep **Deterministic Mode**, and click
+**Run Assessment**.
+
+**C. Deterministic CLI smoke (no credentials needed)**
+
+```bash
+docker run --rm noxus-agentsecops:local \
+  noxus run --mode deterministic \
+    --system-prompt src/noxus/samples/system_prompt.txt \
+    --policy src/noxus/samples/security_policy.yaml \
+    --business-context src/noxus/samples/business_context.md
+```
+
+**D. Optional local audit export (opt-in, local file only)**
+
+```bash
+mkdir -p outputs/audit
+PYTHONPATH=src python3 -m noxus.cli run \
+  --mode deterministic \
+  --system-prompt src/noxus/samples/system_prompt.txt \
+  --policy src/noxus/samples/security_policy.yaml \
+  --business-context src/noxus/samples/business_context.md \
+  --audit-jsonl-output outputs/audit/readiness_reports.jsonl
+```
+
+**E. Optional agent-assisted mode (local LiteLLM-compatible endpoint)**
+
+```bash
+export NOXUS_LLM_BASE_URL="http://localhost:4000/v1"
+export NOXUS_LLM_API_KEY="<your-local-litellm-key>"
+export NOXUS_RED_MODEL="gemini-3.5-flash"
+export NOXUS_JUDGE_MODEL="gemini-3.5-flash"
+export NOXUS_TUNING_MODEL="gemini-3.1-pro-preview"
+```
+
+### What you will see (and why)
+
+- **What Noxus does:** it red-teams a target LLM app with structured probes,
+  detects failures with evidence, proposes schema-bound policy/prompt patches,
+  applies them through a deterministic engine, reruns the probes, and reports a
+  before/after readiness verdict.
+- **Why it is agentic:** in agent-assisted mode three bounded, schema-constrained
+  agents close the loop — a Red Team Agent generates probes, a Semantic Judge
+  evaluates the cases that need judgment, and a Policy Tuning Agent proposes
+  patches — looping at most `MAX_TUNING_ITERATIONS = 2`. Agents only *propose*;
+  the deterministic patch engine *applies*.
+- **What the demo shows:** a deliberately weak policy fails first (including an
+  indirect prompt-injection case labeled `[DETERMINISTIC SIMULATION]`), then a
+  `[CRITICAL_SAFETY_RAILS]` block and policy fixes are applied, and the retest
+  improves.
+- **Why the final status is intentionally `CONDITIONAL_PASS`:** proprietary-context
+  exposure has no approved auto-remediation, so it remains an honest, visible open
+  risk. We never fake a `PASS` or hide open risks — an honest conditional result is
+  more useful to a security reviewer than a green light that isn't earned.
+
+### Evidence-driven engineering summary
+
+- **89 passing tests**, including **35 Milestone 1 deterministic/regression tests**.
+- **Schema-bound Pydantic v2 contracts** for every LLM output (one bounded repair
+  attempt; on failure → `SchemaContractError` → `HUMAN_REVIEW_REQUIRED`).
+- **AST/static scope guard** that blocks forbidden cloud/provider imports and keeps
+  Streamlit isolated to the UI module.
+- **Deterministic patch engine** is the only component that mutates prompts/policy.
+- **Bounded loop:** `MAX_TUNING_ITERATIONS = 2`.
+- **Non-root Docker container** (`python:3.11-slim`, user `noxus_user`).
+- **Local-only JSONL audit export** (opt-in; no network, no cloud SDK).
+
+### Explicit scope honesty
+
+Noxus is **not** a runtime firewall, **not** a compliance certification engine,
+does **not** integrate a real BigQuery/Cloud SDK, and does **not** perform
+production traffic interception. The JSONL audit export is plain local NDJSON that
+*can* be ingested by external pipelines (including BigQuery) without embedding any
+cloud SDK.
 
 ## What Milestone 1 implements
 
