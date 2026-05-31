@@ -108,13 +108,17 @@ def _run_deterministic(
 
     after_results = evaluator.evaluate(probes, patched_prompt, patched_policy)
 
-    return build_report(
+    report = build_report(
         before_results=before_results,
         after_results=after_results,
         patch_set=patch_set,
         business_context_text=business_context_text,
         human_review_requirements=patched_policy.human_review.required_categories,
     )
+    # Presentation telemetry only: expose the REAL patched system prompt so the
+    # UI can render an honest safety-rail preview (no scoring/state impact).
+    report.after_system_prompt = patched_prompt
+    return report
 
 
 # --------------------------------------------------------------------------- #
@@ -132,6 +136,7 @@ def _semantic_finding(probe: Probe, judgment) -> Finding:
         evidence=judgment.reason[:160],
         evidence_source="semantic_llm_judgment",
         remediation_target=["system_prompt", "security_policy"],
+        confidence=judgment.confidence,
     )
 
 
@@ -268,6 +273,8 @@ def _run_agent_assisted(
         )
         report.metadata.mode = "agent_assisted"
         report.metadata.tuning_iterations = iterations_done
+        # Presentation telemetry only: the REAL patched prompt after the loop.
+        report.after_system_prompt = current_prompt
         return report
 
     except SchemaContractError as exc:

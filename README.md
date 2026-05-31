@@ -165,3 +165,59 @@ third-party internals, the README, or generated files. It fails the build if any
 forbidden out-of-scope module or dependency (e.g. `vertexai`, `google.cloud`,
 `langgraph`, `fastapi`, `requests`, `httpx`, `openai`, `anthropic`,
 `google.generativeai`, `google.genai`, `boto3`) appears.
+
+## Milestone 3 — local demo UI & report presentation
+
+Milestone 3 adds a **presentation layer only**. It does not change any core
+behavior: the deterministic evaluator, the agents, the patch engine, and the
+orchestrator are all unchanged. It adds a minimal local Streamlit demo plus
+pure-Python formatting helpers so a reviewer can understand the
+attack → evaluate → patch → retest loop at a glance.
+
+### Run the demo UI
+
+```bash
+pip install -e ".[dev]"   # installs streamlit (the only new runtime dependency)
+streamlit run src/noxus/ui_streamlit.py
+```
+
+The UI lets you pick a mode, edit the target system prompt / security policy
+YAML / business context, run an assessment, and view the iteration timeline, a
+red/blue dashboard, and an evidence report.
+
+- **Deterministic Mode** (default) reproduces Milestone 1/2 deterministic
+  behavior and needs **no model credentials**.
+- **Agent-Assisted Mode** uses the existing env-var provider configuration
+  (`NOXUS_LLM_BASE_URL`, `NOXUS_LLM_API_KEY`, and the `NOXUS_*_MODEL` names). If
+  those env vars are missing, the UI shows a clear warning and does **not** crash
+  or wipe your edits.
+
+### Honest presentation guarantees
+
+- The UI is a **local demo presentation only**. Noxus is a **pre-production
+  readiness tester, not a runtime firewall**, and makes **no compliance
+  certification claims**.
+- `CONDITIONAL_PASS` with an open risk is **intentional and honest** — it is
+  shown in amber and is never cosmetically promoted to `PASS`.
+- **Proprietary-context exposure stays a visible, unresolved open risk** (it has
+  no approved auto-remediation in these milestones).
+- Honest labels are always shown: `[DETERMINISTIC SIMULATION]`,
+  `[SEMANTIC LLM JUDGMENT]` (with the judge's confidence), and
+  `[DETERMINISTIC CHECK]`. Open risks are never hidden.
+
+### Architecture / isolation notes
+
+- **`ui_formatters.py` is pure Python and view-framework-free.** It contains no
+  Streamlit imports, type hints, hooks, or references at all, and is fully
+  unit-testable without a browser. The UI's timeline and dashboard are built from
+  **real structured report data**, never from hardcoded demo values.
+- **Streamlit is isolated to `src/noxus/ui_streamlit.py`** — the only module
+  permitted to import it. `tests/test_ui_scope_guard.py` enforces this statically
+  (AST import nodes only) and verifies that `streamlit` is the only new runtime
+  dependency in `pyproject.toml`.
+- **`st.session_state` persists your edits.** The keys `system_prompt_text`,
+  `security_policy_yaml_text`, `business_context_text`, and `last_report` are
+  initialized from the sample files exactly once, so edits and prior results
+  survive Streamlit reruns (including clicking *Run Assessment*).
+- Tests never start a Streamlit server or a browser — only the pure formatters
+  and the static import boundaries are tested.
