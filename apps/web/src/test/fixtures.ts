@@ -1,8 +1,126 @@
 import type {
+  AgentTrace,
   EvidenceModel,
+  ProviderTestResponse,
   ReadinessSummary,
   RedBlueModel,
 } from "../types/noxus";
+
+export const deterministicTrace: AgentTrace = {
+  execution_mode: "deterministic",
+  provider_type: null,
+  red_model: null,
+  judge_model: null,
+  tuning_model: null,
+  semantic_judgment_source: "deterministic",
+  patch_proposal_source: "deterministic_mapper",
+  stages: [
+    {
+      stage: "red_team",
+      role: "red",
+      model: null,
+      provider_type: null,
+      source: "deterministic_baseline",
+      status: "used",
+      summary: "Ran 6 deterministic baseline probes.",
+    },
+    {
+      stage: "semantic_judge",
+      role: "judge",
+      model: null,
+      provider_type: null,
+      source: "deterministic",
+      status: "not_used",
+      summary: "Semantic judge is not used in deterministic mode.",
+    },
+    {
+      stage: "policy_tuning",
+      role: "tuning",
+      model: null,
+      provider_type: null,
+      source: "deterministic_mapper",
+      status: "used",
+      summary: "Patches mapped deterministically from findings (9).",
+    },
+    {
+      stage: "patch_application",
+      role: null,
+      model: null,
+      provider_type: null,
+      source: "deterministic_engine",
+      status: "used",
+      summary: "Deterministic engine applied 9 allowed patch operations.",
+    },
+  ],
+};
+
+export const agentTrace: AgentTrace = {
+  execution_mode: "agent_assisted",
+  provider_type: "gemini_native",
+  red_model: "gemini-3.5-flash",
+  judge_model: "gemini-3.5-flash",
+  tuning_model: "gemini-3.1-pro-preview",
+  semantic_judgment_source: "llm",
+  patch_proposal_source: "llm",
+  stages: [
+    {
+      stage: "red_team",
+      role: "red",
+      model: "gemini-3.5-flash",
+      provider_type: "gemini_native",
+      source: "llm",
+      status: "used",
+      summary: "Generated structured probes on top of the deterministic baseline.",
+    },
+    {
+      stage: "semantic_judge",
+      role: "judge",
+      model: "gemini-3.5-flash",
+      provider_type: "gemini_native",
+      source: "llm",
+      status: "used",
+      summary: "Evaluated semantic violations and added judged findings.",
+    },
+    {
+      stage: "policy_tuning",
+      role: "tuning",
+      model: "gemini-3.1-pro-preview",
+      provider_type: "gemini_native",
+      source: "llm",
+      status: "used",
+      summary: "Proposed a schema-bound PatchSet (9 operations).",
+    },
+    {
+      stage: "patch_application",
+      role: null,
+      model: null,
+      provider_type: null,
+      source: "deterministic_engine",
+      status: "used",
+      summary: "Deterministic engine applied 9 allowed patch operations.",
+    },
+  ],
+};
+
+export const providerTestSuccess: ProviderTestResponse = {
+  ok: true,
+  provider_type: "gemini_native",
+  checked_at_utc: "2026-06-01T12:00:00+00:00",
+  results: [
+    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: true, latency_ms: 142, response_validated: true, message: "Connected and returned a valid structured response." },
+    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: true, latency_ms: 138, response_validated: true, message: "Connected and returned a valid structured response." },
+    { role: "tuning", purpose: "Proposes schema-bound patches", model: "gemini-3.1-pro-preview", ok: true, latency_ms: 210, response_validated: true, message: "Connected and returned a valid structured response." },
+  ],
+};
+
+export const providerTestFailure: ProviderTestResponse = {
+  ok: false,
+  provider_type: "openai_compatible",
+  checked_at_utc: "2026-06-01T12:00:00+00:00",
+  results: [
+    { role: "red", purpose: "Generates adversarial probes", model: "m1", ok: false, latency_ms: 24, response_validated: false, message: "Provider call failed: Network error contacting LLM endpoint." },
+  ],
+};
 
 export const conditionalPassSummary: ReadinessSummary = {
   badge: {

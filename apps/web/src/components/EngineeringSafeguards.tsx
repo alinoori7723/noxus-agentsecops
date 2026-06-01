@@ -1,60 +1,88 @@
 import {
   FileCheck2,
   Cog,
+  RefreshCcw,
+  UserCheck,
   ScanSearch,
   Container,
   FileJson,
-  RefreshCcw,
-  UserCheck,
+  LayoutPanelTop,
+  FlaskConical,
+  type LucideIcon,
 } from "lucide-react";
 import type { SafeguardItem } from "../types/noxus";
-import { SectionHeader } from "./Section";
 
-// Static trust points the demo asserts about its own engineering. These augment
-// the backend-provided safeguards with the bounded-loop / fallback guarantees.
-const STATIC_SAFEGUARDS: { title: string; detail: string }[] = [
+// Honest, static trust points about the product's engineering. These render with
+// or without a run; real backend-provided safeguards (when present) are merged in
+// by title so nothing is duplicated or drifts.
+const STATIC_SAFEGUARDS: { title: string; detail: string; icon: LucideIcon }[] = [
+  {
+    title: "Pydantic contracts",
+    detail: "Every LLM output validates against strict schemas before entering the workflow.",
+    icon: FileCheck2,
+  },
+  {
+    title: "Deterministic patch engine",
+    detail: "Agents propose; only the deterministic engine applies allowed prompt/policy changes.",
+    icon: Cog,
+  },
   {
     title: "One repair attempt max",
-    detail:
-      "A single schema-repair attempt is allowed; persistent failures fall back to human review.",
+    detail: "A single schema-repair attempt is allowed; persistent failures fall back to human review.",
+    icon: RefreshCcw,
   },
   {
     title: "HUMAN_REVIEW_REQUIRED fallback",
-    detail:
-      "Any unrecoverable schema-contract failure aborts LLM execution and returns a safe state.",
+    detail: "Any unrecoverable schema-contract failure aborts LLM execution and returns a safe state.",
+    icon: UserCheck,
+  },
+  {
+    title: "AST / static scope guard",
+    detail: "Static tests block forbidden cloud/provider SDK imports and product-scope creep.",
+    icon: ScanSearch,
+  },
+  {
+    title: "Non-root Docker runtime",
+    detail: "The packaged container runs as a non-root user on python:3.11-slim.",
+    icon: Container,
+  },
+  {
+    title: "Local-only JSONL audit export",
+    detail: "Opt-in, append-only newline JSON confined to a configured local directory.",
+    icon: FileJson,
+  },
+  {
+    title: "React SPA + FastAPI adapter",
+    detail: "A light React/Tailwind cockpit served by a thin FastAPI API over the unchanged core.",
+    icon: LayoutPanelTop,
+  },
+  {
+    title: "165 Python + 15 frontend tests",
+    detail: "Deterministic core, schema-bound agents, API adapter, and UI components are all tested.",
+    icon: FlaskConical,
   },
 ];
 
-const ICONS = [FileCheck2, Cog, ScanSearch, Container, FileJson, RefreshCcw, UserCheck];
-
 export function EngineeringSafeguards({ items }: { items: SafeguardItem[] }) {
-  const combined = [
-    ...items.map((i) => ({ title: i.title, detail: i.detail })),
-    ...STATIC_SAFEGUARDS,
-  ];
+  // Prefer the real backend detail text when a run has provided it.
+  const backendByTitle = new Map(items.map((i) => [i.title.toLowerCase(), i.detail]));
+  const cards = STATIC_SAFEGUARDS.map((s) => {
+    const backendDetail = backendByTitle.get(s.title.toLowerCase());
+    return { ...s, detail: backendDetail ?? s.detail };
+  });
   return (
-    <section>
-      <SectionHeader
-        kicker="Engineering safeguards"
-        title="Trust boundaries"
-        copy="Concise implementation proof points for reviewers evaluating product scope and safety."
-      />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
-        {combined.map((item, i) => {
-          const Icon = ICONS[i % ICONS.length];
-          return (
-            <div key={item.title} className="nx-card p-4">
-              <Icon size={18} className="text-accent-soft" />
-              <h3 className="mt-2.5 text-sm font-extrabold leading-snug text-white">
-                {item.title}
-              </h3>
-              <p className="mt-1.5 text-xs leading-relaxed text-slate-400">
-                {item.detail}
-              </p>
-            </div>
-          );
-        })}
-      </div>
-    </section>
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {cards.map(({ title, detail, icon: Icon }) => (
+        <div key={title} className="card p-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+            <Icon size={18} />
+          </div>
+          <h4 className="mt-2.5 text-[13px] font-bold leading-snug text-slate-900">
+            {title}
+          </h4>
+          <p className="mt-1 text-[12px] leading-relaxed text-slate-500">{detail}</p>
+        </div>
+      ))}
+    </div>
   );
 }

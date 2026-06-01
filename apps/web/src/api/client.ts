@@ -6,6 +6,8 @@ import type {
   AssessmentResponse,
   HealthPayload,
   ProofIndicators,
+  ProviderConfig,
+  ProviderTestResponse,
   RunAssessmentRequest,
   SampleInputs,
 } from "../types/noxus";
@@ -55,6 +57,19 @@ export async function runAssessment(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
+  });
+  if (!res.ok) return parseError(res);
+  return res.json();
+}
+
+export async function testProvider(
+  provider_config: ProviderConfig,
+  models_to_test: ("red" | "judge" | "tuning")[],
+): Promise<ProviderTestResponse> {
+  const res = await fetch("/api/providers/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider_config, models_to_test }),
   });
   if (!res.ok) return parseError(res);
   return res.json();

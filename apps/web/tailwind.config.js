@@ -4,22 +4,16 @@ export default {
   theme: {
     extend: {
       colors: {
-        ink: {
-          950: "#070b14",
-          900: "#0b1120",
-          850: "#0f1729",
-          800: "#141d33",
-          700: "#1c2741",
-          600: "#26344f",
+        // Restrained brand accent (indigo) for a calm enterprise feel.
+        brand: {
+          50: "#eef2ff",
+          100: "#e0e7ff",
+          200: "#c7d2fe",
+          500: "#6366f1",
+          600: "#4f46e5",
+          700: "#4338ca",
         },
-        line: {
-          DEFAULT: "#22304d",
-          soft: "#1a2540",
-        },
-        accent: {
-          DEFAULT: "#6366f1",
-          soft: "#818cf8",
-        },
+        canvas: "#f5f6f8",
       },
       fontFamily: {
         sans: [
@@ -42,8 +36,9 @@ export default {
         ],
       },
       boxShadow: {
-        panel: "0 24px 64px rgba(0, 0, 0, 0.45)",
-        glow: "0 18px 50px rgba(99, 102, 241, 0.25)",
+        card: "0 1px 2px rgba(16, 24, 40, 0.04), 0 1px 3px rgba(16, 24, 40, 0.06)",
+        cardhover: "0 4px 12px rgba(16, 24, 40, 0.08)",
+        raised: "0 8px 24px rgba(16, 24, 40, 0.10)",
       },
     },
   },

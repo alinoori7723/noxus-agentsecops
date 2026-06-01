@@ -2,11 +2,11 @@ import clsx from "clsx";
 import type { ChipColor } from "../types/noxus";
 
 const CHIP_STYLES: Record<ChipColor, string> = {
-  green: "border-emerald-500/40 bg-emerald-500/12 text-emerald-300",
-  amber: "border-amber-500/40 bg-amber-500/12 text-amber-300",
-  red: "border-rose-500/40 bg-rose-500/12 text-rose-300",
-  blue: "border-sky-500/40 bg-sky-500/12 text-sky-300",
-  neutral: "border-slate-600/50 bg-slate-600/15 text-slate-300",
+  green: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  amber: "border-amber-200 bg-amber-50 text-amber-700",
+  red: "border-rose-200 bg-rose-50 text-rose-700",
+  blue: "border-sky-200 bg-sky-50 text-sky-700",
+  neutral: "border-slate-200 bg-slate-100 text-slate-600",
 };
 
 export function chipClasses(color: ChipColor): string {
@@ -29,7 +29,7 @@ export function StatusChip({
   return (
     <span
       className={clsx(
-        "inline-flex items-center whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[11px] font-bold leading-5",
+        "inline-flex items-center whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-semibold leading-5",
         mono && "font-mono tracking-tight",
         chipClasses(color),
         className,

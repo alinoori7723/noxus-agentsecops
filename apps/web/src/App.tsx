@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { AppShell } from "./components/AppShell";
-import { Hero } from "./components/Hero";
+import { useCallback, useEffect, useState } from "react";
+import { Sidebar } from "./components/Sidebar";
+import { TopHeader } from "./components/TopHeader";
+import { NAV_ITEMS, type SectionId } from "./components/nav";
+import { Overview } from "./components/Overview";
 import { InputWorkspace, type TargetInputs } from "./components/InputWorkspace";
-import { ModeProviderPanel } from "./components/ModeProviderPanel";
+import { AssessmentPanel } from "./components/AssessmentPanel";
+import { ProviderSettings, type ProviderTestState } from "./components/ProviderSettings";
 import { EmptyState } from "./components/EmptyState";
 import { ReadinessSummary } from "./components/ReadinessSummary";
+import { RoleObservability } from "./components/RoleObservability";
 import { AuditTimeline } from "./components/AuditTimeline";
 import { RedBlueDashboard } from "./components/RedBlueDashboard";
 import { EvidenceReport } from "./components/EvidenceReport";
@@ -15,14 +19,27 @@ import {
   getProof,
   getSampleInputs,
   runAssessment,
+  testProvider,
   ApiError,
 } from "./api/client";
 import type {
+  AgentRole,
   AssessmentResponse,
   Mode,
   ProofIndicators,
   ProviderConfig,
 } from "./types/noxus";
+
+function providerSignature(p: ProviderConfig): string {
+  return JSON.stringify([
+    p.provider_type,
+    p.base_url ?? "",
+    p.api_key ?? "",
+    p.red_model ?? "",
+    p.judge_model ?? "",
+    p.tuning_model ?? "",
+  ]);
+}
 
 const EMPTY_INPUTS: TargetInputs = {
   system_prompt: "",
@@ -40,7 +57,10 @@ const DEFAULT_PROVIDER: ProviderConfig = {
 };
 
 export default function App() {
+  const [section, setSection] = useState<SectionId>("overview");
   const [inputs, setInputs] = useState<TargetInputs>(EMPTY_INPUTS);
+  const [sampleInputs, setSampleInputs] = useState<TargetInputs>(EMPTY_INPUTS);
+  const [loadedFromSample, setLoadedFromSample] = useState(false);
   const [mode, setMode] = useState<Mode>("deterministic");
   const [provider, setProvider] = useState<ProviderConfig>(DEFAULT_PROVIDER);
 
@@ -52,17 +72,55 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AssessmentResponse | null>(null);
 
-  const resultsRef = useRef<HTMLDivElement>(null);
+  const [providerTest, setProviderTest] = useState<{
+    status: ProviderTestState["status"];
+    response: ProviderTestState["response"];
+    error: string | null;
+    testedSignature: string | null;
+  }>({ status: "idle", response: null, error: null, testedSignature: null });
+
+  const onTestProvider = useCallback(
+    async (roles: AgentRole[]) => {
+      setProviderTest((s) => ({ ...s, status: "testing", error: null }));
+      try {
+        const response = await testProvider(provider, roles);
+        setProviderTest({
+          status: "done",
+          response,
+          error: null,
+          testedSignature: providerSignature(provider),
+        });
+      } catch (e) {
+        const msg =
+          e instanceof ApiError ? e.message : "Provider test could not be completed.";
+        setProviderTest({
+          status: "done",
+          response: null,
+          error: msg,
+          testedSignature: null,
+        });
+      }
+    },
+    [provider],
+  );
+
+  const providerStale =
+    providerTest.testedSignature !== null &&
+    providerTest.testedSignature !== providerSignature(provider);
+  const providerTestOk = providerTest.response?.ok === true;
 
   const loadSamples = useCallback(async () => {
     setSamplesLoading(true);
     try {
       const s = await getSampleInputs();
-      setInputs({
+      const next = {
         system_prompt: s.system_prompt,
         security_policy_yaml: s.security_policy_yaml,
         business_context: s.business_context,
-      });
+      };
+      setSampleInputs(next);
+      setInputs(next);
+      setLoadedFromSample(true);
     } catch {
       // leave inputs unchanged on failure
     } finally {
@@ -70,7 +128,6 @@ export default function App() {
     }
   }, []);
 
-  // One-time bootstrap: health, proof chips, and initial sample inputs.
   useEffect(() => {
     getHealth()
       .then((h) => setOnline(Boolean(h.ok)))
@@ -81,70 +138,137 @@ export default function App() {
     void loadSamples();
   }, [loadSamples]);
 
-  const onRun = useCallback(async () => {
-    setRunning(true);
-    setError(null);
-    try {
-      const req = {
-        mode,
-        system_prompt: inputs.system_prompt,
-        security_policy_yaml: inputs.security_policy_yaml,
-        business_context: inputs.business_context,
-        ...(mode === "agent_assisted" ? { provider_config: provider } : {}),
-      };
-      const res = await runAssessment(req);
-      setResult(res);
-      // Scroll to results on the next paint.
-      requestAnimationFrame(() =>
-        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
-    } catch (e) {
-      const msg =
-        e instanceof ApiError
-          ? e.message
-          : "The assessment could not be completed. Please try again.";
-      setError(msg);
-    } finally {
-      setRunning(false);
-    }
-  }, [mode, inputs, provider]);
+  const run = useCallback(
+    async (runMode: Mode) => {
+      setRunning(true);
+      setError(null);
+      try {
+        const req = {
+          mode: runMode,
+          system_prompt: inputs.system_prompt,
+          security_policy_yaml: inputs.security_policy_yaml,
+          business_context: inputs.business_context,
+          ...(runMode === "agent_assisted" ? { provider_config: provider } : {}),
+        };
+        const res = await runAssessment(req);
+        setResult(res);
+        setSection("results");
+      } catch (e) {
+        const msg =
+          e instanceof ApiError
+            ? e.message
+            : "The assessment could not be completed. Please try again.";
+        setError(msg);
+      } finally {
+        setRunning(false);
+      }
+    },
+    [inputs, provider],
+  );
+
+  const resetTab = useCallback(
+    (key: keyof TargetInputs) =>
+      setInputs((prev) => ({ ...prev, [key]: sampleInputs[key] })),
+    [sampleInputs],
+  );
+
+  const navItem = NAV_ITEMS.find((n) => n.id === section)!;
 
   return (
-    <AppShell proof={proof} online={online}>
-      <div className="space-y-8">
-        <Hero />
-        <InputWorkspace
-          value={inputs}
-          onChange={setInputs}
-          onLoadSamples={loadSamples}
-          onReset={() => setInputs(EMPTY_INPUTS)}
-          samplesLoading={samplesLoading}
+    <div className="flex h-full min-h-screen bg-canvas">
+      <Sidebar active={section} onSelect={setSection} hasResult={result !== null} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <TopHeader
+          title={navItem.label === "Overview" ? "Noxus AgentSecOps" : navItem.label}
+          subtitle={navItem.subtitle}
+          proof={proof}
+          online={online}
         />
-        <ModeProviderPanel
-          mode={mode}
-          onModeChange={setMode}
-          provider={provider}
-          onProviderChange={setProvider}
-          onRun={onRun}
-          running={running}
-          error={error}
-        />
-
-        <div ref={resultsRef} className="space-y-8 scroll-mt-20">
-          {result ? (
-            <>
-              <ReadinessSummary model={result.readiness} />
-              <AuditTimeline steps={result.timeline} />
-              <RedBlueDashboard model={result.red_blue} />
-              <EvidenceReport model={result.evidence} />
-              <OpenRisks model={result.evidence} />
-              <EngineeringSafeguards items={result.safeguards} />
-            </>
-          ) : (
-            <EmptyState />
+        <main className="mx-auto w-full max-w-[1200px] flex-1 px-6 py-7 lg:px-8">
+          {section === "overview" && (
+            <Overview
+              onConfigure={() => setSection("target")}
+              onRunDemo={() => {
+                setMode("deterministic");
+                void run("deterministic");
+              }}
+              running={running}
+            />
           )}
-        </div>
+
+          {section === "target" && (
+            <InputWorkspace
+              value={inputs}
+              onChange={setInputs}
+              onLoadSamples={loadSamples}
+              onResetTab={resetTab}
+              samplesLoading={samplesLoading}
+              loadedFromSample={loadedFromSample}
+            />
+          )}
+
+          {section === "assessment" && (
+            <AssessmentPanel
+              mode={mode}
+              onModeChange={setMode}
+              provider={provider}
+              onGoToProvider={() => setSection("provider")}
+              onRun={() => void run(mode)}
+              running={running}
+              error={error}
+              providerTestOk={providerTestOk}
+              providerTestStale={providerStale}
+            />
+          )}
+
+          {section === "provider" && (
+            <ProviderSettings
+              provider={provider}
+              onChange={setProvider}
+              testState={{
+                status: providerTest.status,
+                response: providerTest.response,
+                error: providerTest.error,
+                stale: providerStale,
+              }}
+              onTest={onTestProvider}
+            />
+          )}
+
+          {section === "results" &&
+            (result ? (
+              <div className="space-y-6">
+                <ReadinessSummary model={result.readiness} />
+                <RoleObservability
+                  trace={result.agent_trace}
+                  evidence={result.evidence}
+                />
+                <AuditTimeline steps={result.timeline} />
+                <RedBlueDashboard model={result.red_blue} />
+              </div>
+            ) : (
+              <EmptyState onGoToAssessment={() => setSection("assessment")} />
+            ))}
+
+          {section === "evidence" &&
+            (result ? (
+              <EvidenceReport model={result.evidence} />
+            ) : (
+              <EmptyState onGoToAssessment={() => setSection("assessment")} />
+            ))}
+
+          {section === "risks" &&
+            (result ? (
+              <OpenRisks model={result.evidence} />
+            ) : (
+              <EmptyState onGoToAssessment={() => setSection("assessment")} />
+            ))}
+
+          {section === "proof" && (
+            <EngineeringSafeguards items={result?.safeguards ?? []} />
+          )}
+        </main>
       </div>
-    </AppShell>
+    </div>
   );
 }

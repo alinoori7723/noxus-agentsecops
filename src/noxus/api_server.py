@@ -115,6 +115,19 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
         return response
 
+    @app.post("/api/providers/test")
+    def test_provider(req: api_core.ProviderTestRequest) -> dict:
+        # Log only the provider type + roles — never the api_key or provider_config.
+        logger.info(
+            "provider test: type=%s roles=%s",
+            req.provider_config.provider_type,
+            req.models_to_test,
+        )
+        try:
+            return api_core.test_provider(req.provider_config, req.models_to_test)
+        except api_core.ApiError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
     @app.post("/api/audit/export-local")
     def export_audit(req: api_core.AuditExportRequest) -> dict:
         # Writes ONLY under the server-configured audit dir; client supplies at

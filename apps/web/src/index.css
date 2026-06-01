@@ -4,7 +4,7 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   html,
@@ -14,54 +14,69 @@
   }
 
   body {
-    @apply bg-ink-950 text-slate-200 antialiased;
-    background-image:
-      radial-gradient(
-        60rem 40rem at 85% -10%,
-        rgba(99, 102, 241, 0.12),
-        transparent
-      ),
-      radial-gradient(
-        50rem 30rem at -10% 0%,
-        rgba(56, 189, 248, 0.08),
-        transparent
-      );
-    background-attachment: fixed;
+    @apply bg-canvas text-slate-700 antialiased;
   }
 
   ::selection {
-    @apply bg-indigo-500/30;
+    @apply bg-brand-100 text-brand-700;
   }
 }
 
 @layer components {
-  .nx-panel {
-    @apply rounded-2xl border border-line bg-ink-900/70 shadow-panel;
+  /* Surfaces */
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-card;
   }
 
-  .nx-card {
-    @apply rounded-xl border border-line-soft bg-ink-850/80;
+  .kicker {
+    @apply text-[11px] font-bold uppercase tracking-[0.12em] text-slate-400;
   }
 
-  .nx-kicker {
-    @apply text-[11px] font-extrabold uppercase tracking-[0.14em] text-slate-500;
+  /* Inputs */
+  .field {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm
+      text-slate-800 outline-none transition placeholder:text-slate-400
+      focus:border-brand-500 focus:ring-2 focus:ring-brand-100;
   }
 
-  .nx-input {
-    @apply w-full resize-y rounded-xl border border-line bg-ink-950/60 p-4 font-mono
-      text-[13px] leading-relaxed text-slate-100 outline-none transition
-      placeholder:text-slate-600 focus:border-accent/60 focus:ring-2
-      focus:ring-accent/20;
+  .editor {
+    @apply w-full resize-y rounded-lg border border-slate-300 bg-slate-50/60 p-4
+      font-mono text-[13.5px] leading-relaxed text-slate-800 outline-none
+      transition placeholder:text-slate-400 focus:border-brand-500
+      focus:bg-white focus:ring-2 focus:ring-brand-100;
   }
 
-  .nx-field {
-    @apply w-full rounded-lg border border-line bg-ink-950/60 px-3 py-2 text-sm
-      text-slate-100 outline-none transition placeholder:text-slate-600
-      focus:border-accent/60 focus:ring-2 focus:ring-accent/20;
+  /* Buttons */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-600
+      px-4 py-2.5 text-sm font-semibold text-white transition
+      hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-200
+      disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500;
   }
 
-  .nx-scroll {
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border
+      border-slate-300 bg-white px-3.5 py-2 text-sm font-semibold text-slate-700
+      transition hover:border-slate-400 hover:bg-slate-50;
+  }
+
+  .nav-item {
+    @apply flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm
+      font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900;
+  }
+
+  .nav-item-active {
+    @apply bg-brand-50 text-brand-700 hover:bg-brand-50 hover:text-brand-700;
+  }
+
+  .code-block {
+    @apply overflow-auto whitespace-pre-wrap break-words rounded-lg border
+      border-slate-200 bg-slate-50 p-3 font-mono text-[12px] leading-relaxed
+      text-slate-700;
+  }
+
+  .scroll-thin {
     scrollbar-width: thin;
-    scrollbar-color: #2a3a5c transparent;
+    scrollbar-color: #cbd5e1 transparent;
   }
 }

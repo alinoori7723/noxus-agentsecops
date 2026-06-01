@@ -169,11 +169,18 @@ def test_gemini_provider_uses_stdlib_urllib_and_header_key():
 
 
 def test_frontend_does_not_persist_api_keys():
-    """No localStorage/sessionStorage usage in the React app (keys are in-memory)."""
+    """No localStorage/sessionStorage usage in the React app (keys are in-memory).
+
+    Test files under src/test/ are excluded — they legitimately read web storage
+    only to ASSERT it stays empty.
+    """
     if not WEB_SRC.is_dir():
         return  # frontend not present in this checkout
+    test_dir = WEB_SRC / "test"
     offenders = []
     for path in sorted(WEB_SRC.rglob("*.ts*")):
+        if test_dir in path.parents:
+            continue
         text = path.read_text(encoding="utf-8")
         if "localStorage" in text or "sessionStorage" in text:
             offenders.append(path.name)
@@ -181,8 +188,8 @@ def test_frontend_does_not_persist_api_keys():
 
 
 def test_frontend_api_key_field_is_password():
-    """The provider panel renders the API key as a password input."""
-    panel = WEB_SRC / "components" / "ModeProviderPanel.tsx"
+    """The provider settings panel renders the API key as a password input."""
+    panel = WEB_SRC / "components" / "ProviderSettings.tsx"
     if not panel.exists():
         return
     text = panel.read_text(encoding="utf-8")

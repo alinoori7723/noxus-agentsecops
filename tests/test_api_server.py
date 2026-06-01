@@ -261,3 +261,77 @@ def test_dev_cors_requires_env_flag(monkeypatch):
     # A non-allowed origin is not reflected.
     other = c_on.get("/api/health", headers={"Origin": "http://evil.example"})
     assert other.headers.get("access-control-allow-origin") not in ("*", "http://evil.example")
+
+
+# --------------------------------------------------------------------------- #
+# Provider connectivity test endpoint + agent trace
+# --------------------------------------------------------------------------- #
+def test_provider_test_endpoint_missing_key_returns_400(client):
+    r = client.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {"provider_type": "gemini_native"},
+            "models_to_test": ["red"],
+        },
+    )
+    assert r.status_code == 400
+
+
+def test_provider_test_endpoint_unreachable_does_not_echo_key(client):
+    r = client.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {
+                "provider_type": "openai_compatible",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": _SENTINEL_KEY,
+                "red_model": "m1",
+                "judge_model": "m2",
+                "tuning_model": "m3",
+            },
+            "models_to_test": ["red", "judge", "tuning"],
+        },
+    )
+    assert r.status_code == 200  # the endpoint reports per-model failures cleanly
+    body = r.json()
+    assert body["ok"] is False
+    assert _SENTINEL_KEY not in r.text
+    assert {res["role"] for res in body["results"]} == {"red", "judge", "tuning"}
+
+
+def test_provider_test_endpoint_writes_no_audit_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("NOXUS_AUDIT_DIR", str(tmp_path))
+    from noxus.api_server import create_app
+
+    c = TestClient(create_app())
+    c.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {
+                "provider_type": "openai_compatible",
+                "base_url": "http://127.0.0.1:9/v1",
+                "api_key": "k",
+                "red_model": "m",
+            },
+            "models_to_test": ["red"],
+        },
+    )
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_run_response_includes_agent_trace(client):
+    s = client.get("/api/sample-inputs").json()
+    r = client.post(
+        "/api/assessments/run",
+        json={
+            "mode": "deterministic",
+            "system_prompt": s["system_prompt"],
+            "security_policy_yaml": s["security_policy_yaml"],
+            "business_context": s["business_context"],
+        },
+    )
+    body = r.json()
+    assert body["execution_mode"] == "deterministic"
+    trace = body["agent_trace"]
+    stages = {st["stage"] for st in trace["stages"]}
+    assert {"red_team", "semantic_judge", "policy_tuning", "patch_application"} <= stages

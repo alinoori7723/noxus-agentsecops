@@ -169,12 +169,56 @@ export interface SafeguardItem {
   tone: ChipColor;
 }
 
+export type AgentRole = "red" | "judge" | "tuning";
+export type StageStatus = "used" | "not_used" | "failed" | "human_review_required";
+
+export interface AgentTraceStage {
+  stage: string;
+  role: AgentRole | null;
+  model: string | null;
+  provider_type: string | null;
+  source: string;
+  status: StageStatus;
+  summary: string;
+}
+
+export interface AgentTrace {
+  execution_mode: Mode;
+  provider_type: string | null;
+  red_model: string | null;
+  judge_model: string | null;
+  tuning_model: string | null;
+  semantic_judgment_source: string;
+  patch_proposal_source: string;
+  stages: AgentTraceStage[];
+}
+
+export interface ProviderTestRoleResult {
+  role: AgentRole;
+  purpose: string;
+  model: string;
+  ok: boolean;
+  latency_ms: number;
+  response_validated: boolean;
+  message: string;
+}
+
+export interface ProviderTestResponse {
+  ok: boolean;
+  provider_type: string;
+  checked_at_utc: string;
+  results: ProviderTestRoleResult[];
+}
+
 export interface AssessmentResponse {
   readiness: ReadinessSummary;
   timeline: TimelineStep[];
   red_blue: RedBlueModel;
   evidence: EvidenceModel;
   safeguards: SafeguardItem[];
+  agent_trace: AgentTrace;
+  execution_mode: string;
+  provider_type: string | null;
   metadata: {
     mode: string;
     tuning_iterations: number;
