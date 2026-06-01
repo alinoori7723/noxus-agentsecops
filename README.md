@@ -13,15 +13,16 @@ engine, a production traffic gateway, or a replacement for Google security
 products. It is a repeatable way to validate and tune prompt/policy security
 *before* production, with honest results.
 
-All four engineering milestones are complete and accepted (deterministic
-skeleton → agent layer → demo UI → container packaging), backed by **91+ passing
-tests**.
+All engineering milestones are complete and accepted (deterministic skeleton →
+agent layer → demo UI → container packaging), and the UI has been rebuilt as a
+production-grade **React/Tailwind cockpit** served by a minimal **FastAPI**
+backend, backed by **152 passing tests** (plus 5 Vitest frontend tests).
 
 | Layer                    | Status       |
 | ------------------------ | ------------ |
 | Deterministic evaluator  | Complete     |
 | Agent layer              | Complete     |
-| Demo UI                  | Complete     |
+| React + FastAPI UI       | Complete     |
 | Docker packaging         | Complete     |
 | Audit export             | Local JSONL  |
 | Runtime gateway          | Out of scope |
@@ -32,24 +33,24 @@ tests**.
 **A. Build the Docker image**
 
 ```bash
-docker build -t noxus-agentsecops:local .
+docker build -t noxus-agentsecops:react-local .
 ```
 
-**B. Run the local Streamlit demo**
+**B. Run the React cockpit (FastAPI serves the built SPA + the API)**
 
 ```bash
-docker run --rm -p 8501:8501 \
-  -e NOXUS_STREAMLIT_PORT=8501 \
-  noxus-agentsecops:local
+docker run --rm -p 8787:8787 \
+  -e NOXUS_API_PORT=8787 \
+  noxus-agentsecops:react-local
 ```
 
-Then open http://localhost:8501, keep **Deterministic Mode**, and click
-**Run Assessment**.
+Then open http://localhost:8787, keep **Deterministic Mode**, and click
+**Run Readiness Assessment**. Deterministic mode needs **no AI credentials**.
 
 **C. Deterministic CLI smoke (no credentials needed)**
 
 ```bash
-docker run --rm noxus-agentsecops:local \
+docker run --rm noxus-agentsecops:react-local \
   noxus run --mode deterministic \
     --system-prompt src/noxus/samples/system_prompt.txt \
     --policy src/noxus/samples/security_policy.yaml \
@@ -100,11 +101,13 @@ export NOXUS_TUNING_MODEL="gemini-3.1-pro-preview"
 
 ### Evidence-driven engineering summary
 
-- **91+ passing tests**, including **35 Milestone 1 deterministic/regression tests**.
+- **152 passing tests** (Python core + API; run via `pip install -e ".[dev]"`
+  then `pytest -q`), including **35 Milestone 1 deterministic/regression tests**,
+  plus **5 Vitest frontend tests**.
 - **Schema-bound Pydantic v2 contracts** for every LLM output (one bounded repair
   attempt; on failure → `SchemaContractError` → `HUMAN_REVIEW_REQUIRED`).
 - **AST/static scope guard** that blocks forbidden cloud/provider imports and keeps
-  Streamlit isolated to the UI module.
+  the web framework isolated to `api_server.py`.
 - **Deterministic patch engine** is the only component that mutates prompts/policy.
 - **Bounded loop:** `MAX_TUNING_ITERATIONS = 2`.
 - **Non-root Docker container** (`python:3.11-slim`, user `noxus_user`).
@@ -169,9 +172,18 @@ pip install -e ".[dev]"
 
 ## Run tests
 
+Install the test extras first — they include `httpx`, which `fastapi.testclient`
+needs for the HTTP-level API tests. Without the extras those tests are skipped:
+
 ```bash
-pytest -q
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"   # pytest + httpx (test-only)
+.venv/bin/pytest -q                 # full suite: 152 passed
 ```
+
+`httpx` is a **test-only** dependency (not a runtime dependency). Running
+`pytest` without the dev extras (e.g. on a bare host without FastAPI/httpx)
+honestly skips the HTTP-level API suite rather than reporting it as passing.
 
 ## Run the CLI smoke demo
 
@@ -276,45 +288,120 @@ forbidden out-of-scope module or dependency (e.g. `vertexai`, `google.cloud`,
 `langgraph`, `fastapi`, `requests`, `httpx`, `openai`, `anthropic`,
 `google.generativeai`, `google.genai`, `boto3`) appears.
 
-## Milestone 3 — local demo UI & report presentation
+## Web UI — React cockpit + FastAPI backend
 
-Milestone 3 adds a **presentation layer only**. It does not change any core
-behavior: the deterministic evaluator, the agents, the patch engine, and the
-orchestrator are all unchanged. It adds a full-width local Streamlit demo plus
-pure-Python formatting helpers so a reviewer can understand the
-attack → evaluate → patch → retest loop at a glance.
+The presentation layer is a production-grade **React + TypeScript + Vite +
+Tailwind** single-page app served by a minimal **FastAPI** backend. It changes
+no core behavior: the deterministic evaluator, the agents, the patch engine, and
+the orchestrator are all unchanged. The pure-Python `ui_formatters` display
+models are reused by the API so honest-labeling rules live in exactly one place.
 
-### Run the demo UI
+> The previous Streamlit UI has been fully removed from the runtime. `streamlit`
+> is no longer a dependency.
+
+### Architecture
+
+- **`src/noxus/api_core.py`** — framework-free request/response logic, provider
+  construction, API-key redaction, and assessment running. Fully unit-testable
+  without a web server.
+- **`src/noxus/api_server.py`** — the only module that imports the web framework.
+  Thin FastAPI app exposing `/api/*` and serving the built React SPA.
+- **`apps/web/`** — the React frontend (hand-crafted Tailwind components).
+
+### Run in development (two processes)
 
 ```bash
-pip install -e ".[dev]"   # installs streamlit (the only new runtime dependency)
-streamlit run src/noxus/ui_streamlit.py
+# 1) Backend API (no AI credentials needed for deterministic mode)
+pip install -e .
+NOXUS_TEST_COUNT=152 uvicorn noxus.api_server:app --reload --port 8787
+
+# 2) Frontend dev server (proxies /api to the backend)
+cd apps/web
+npm install
+npm run dev          # http://localhost:5173
 ```
 
-The UI lets you pick a mode, edit the target system prompt / security policy
-YAML / business context, run an assessment, and view the iteration timeline, a
-Red Team / Blue Team cockpit, and an evidence report.
+For a production-style single-origin run, build the SPA and let FastAPI serve it:
 
-- **Deterministic Mode** (default) reproduces Milestone 1/2 deterministic
-  behavior and needs **no model credentials**.
-- **Agent-Assisted Mode** uses the existing env-var provider configuration
-  (`NOXUS_LLM_BASE_URL`, `NOXUS_LLM_API_KEY`, and the `NOXUS_*_MODEL` names). If
-  those env vars are missing, the UI shows a clear warning and does **not** crash
-  or wipe your edits.
+```bash
+cd apps/web && npm run build && cd -
+NOXUS_WEB_DIST=apps/web/dist NOXUS_TEST_COUNT=152 \
+  uvicorn noxus.api_server:app --port 8787
+# open http://localhost:8787
+```
+
+### API endpoints
+
+| Method & path                | Purpose                                              |
+| ---------------------------- | ---------------------------------------------------- |
+| `GET  /api/health`           | `{ ok, product, mode }` liveness                     |
+| `GET  /api/sample-inputs`    | Bundled sample system prompt / policy / context      |
+| `GET  /api/proof`            | Non-secret proof indicators (test count, etc.)       |
+| `POST /api/assessments/run`  | Run a deterministic or agent-assisted assessment     |
+| `POST /api/audit/export-local` | Opt-in: append the report under the configured audit dir |
+
+### Server configuration & hardening
+
+| Env var                  | Default        | Purpose                                              |
+| ------------------------ | -------------- | ---------------------------------------------------- |
+| `NOXUS_API_PORT`         | `8787`         | uvicorn listen port.                                 |
+| `NOXUS_WEB_DIST`         | auto-detected  | Built SPA directory to serve.                        |
+| `NOXUS_AUDIT_DIR`        | `outputs/audit`| Directory the audit export is **confined** to.       |
+| `NOXUS_ENABLE_DEV_CORS`  | _unset (off)_  | Set truthy to enable CORS — **local dev only**.      |
+| `NOXUS_DEV_CORS_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` | Comma-separated allowlist when dev CORS is on. |
+
+Hardening notes:
+
+- **CORS is OFF by default** and is **never a wildcard**. It is enabled only when
+  `NOXUS_ENABLE_DEV_CORS` is truthy, and only for the explicit origin allowlist —
+  intended for local development against the Vite dev server.
+- **Static SPA serving is confined to the built directory.** Requested paths are
+  resolved and checked for containment (no `..` traversal, no absolute paths); a
+  request outside the static root returns `404`. Backend source, `pyproject.toml`,
+  and `package.json` are never served.
+- **Audit export never accepts a caller path.** `POST /api/audit/export-local`
+  takes at most a sanitized `filename` (bare `*.jsonl`, no slashes/`..`) and
+  always writes under `NOXUS_AUDIT_DIR`. Invalid names return `400`. It writes
+  only when explicitly called.
+
+### Provider configuration (Agent-Assisted Mode)
+
+**Deterministic Mode** is the default judge path and requires **no provider and
+no API key**. **Agent-Assisted Mode** sends a `provider_config` to the backend:
+
+- **Local LLM / LiteLLM** (`local_openai_compatible`) — OpenAI-style gateway,
+  default base URL `http://localhost:4000/v1`.
+- **OpenAI-compatible** (`openai_compatible`) — any vendor exposing
+  `/v1/chat/completions`; set the base URL.
+- **Gemini native** (`gemini_native`) — Google Generative Language API via the
+  standard library (no SDK). Model presets (`gemini-3.5-flash`,
+  `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite-preview`) are convenience
+  defaults, **not availability claims** — any custom model ID can be typed.
+
+### API key handling (privacy)
+
+- The API key is entered in a **password field** and sent **only** in the POST
+  body of `/api/assessments/run`, for **that one request**.
+- The backend uses it **in memory** to build the provider, then discards it. It
+  is **never** stored in reports, audit export, logs, the response, browser
+  `localStorage`, or URL query params. Backend logs only redacted metadata.
+- Deterministic mode never involves a key at all.
 
 ### Manual UI smoke checklist
 
 Use this short screen-recording pass before judging or demo submission:
 
-- Open the Streamlit UI with `streamlit run src/noxus/ui_streamlit.py`.
+- Open the cockpit (dev `http://localhost:5173`, or built `http://localhost:8787`).
 - Confirm the pre-run **Ready to run** panel shows the three-step loop (baseline
   probes → structured remediation → retest and report open risks).
-- Keep **Deterministic Mode** selected in the segmented control and click **Run Assessment**.
+- Keep **Deterministic Mode** selected and click **Run Readiness Assessment**.
 - Confirm `[DETERMINISTIC SIMULATION]` is visible in the Red Team / evidence views.
 - Confirm `[CRITICAL_SAFETY_RAILS]` is visible in the Blue Team safety-rail preview.
 - Confirm the final readiness card shows `CONDITIONAL_PASS`, not `PASS`.
 - Confirm proprietary-context exposure appears under **Open Risks / Human Review**.
-- Edit an input, click **Run Assessment**, and confirm the edit survives rerun.
+- Switch to **Agent-Assisted Mode** and confirm the provider panel (provider type,
+  password API-key field, model fields, Gemini presets + custom) and the in-memory
+  key note are shown; with no key the Run button is disabled.
 - Confirm there is no fake `PASS` and no hidden open-risk state.
 
 ### Honest presentation guarantees
@@ -322,8 +409,8 @@ Use this short screen-recording pass before judging or demo submission:
 - The UI is a **local demo presentation only**. Noxus is a **pre-production
   readiness tester, not a runtime firewall**, and makes **no compliance
   certification claims**.
-- `CONDITIONAL_PASS` with an open risk is **intentional and honest** — it is
-  shown in amber and is never cosmetically promoted to `PASS`.
+- `CONDITIONAL_PASS` with an open risk is **intentional and honest** — shown in
+  amber and never cosmetically promoted to `PASS`.
 - **Proprietary-context exposure stays a visible, unresolved open risk** (it has
   no approved auto-remediation in these milestones).
 - Honest labels are always shown: `[DETERMINISTIC SIMULATION]`,
@@ -332,20 +419,15 @@ Use this short screen-recording pass before judging or demo submission:
 
 ### Architecture / isolation notes
 
-- **`ui_formatters.py` is pure Python and view-framework-free.** It contains no
-  Streamlit imports, type hints, hooks, or references at all, and is fully
-  unit-testable without a browser. The UI's timeline and dashboard are built from
-  **real structured report data**, never from hardcoded demo values.
-- **Streamlit is isolated to `src/noxus/ui_streamlit.py`** — the only module
-  permitted to import it. `tests/test_ui_scope_guard.py` enforces this statically
-  (AST import nodes only) and verifies that `streamlit` is the only new runtime
-  dependency in `pyproject.toml`.
-- **`st.session_state` persists your edits.** The keys `system_prompt_text`,
-  `security_policy_yaml_text`, `business_context_text`, and `last_report` are
-  initialized from the sample files exactly once, so edits and prior results
-  survive Streamlit reruns (including clicking *Run Assessment*).
-- Tests never start a Streamlit server or a browser — only the pure formatters
-  and the static import boundaries are tested.
+- **`ui_formatters.py` is pure Python and view-framework-free**, reused by both
+  the API and tests. Display data is built from **real structured report data**,
+  never hardcoded demo values.
+- **The web framework is isolated to `api_server.py`** — the only module allowed
+  to import FastAPI. `api_core.py` stays framework-free.
+  `tests/test_ui_scope_guard.py` enforces this statically and verifies the
+  runtime dependency set (`pydantic`, `PyYAML`, `fastapi`, `uvicorn`).
+- The React app keeps inputs and results in component state; **API keys are never
+  persisted** (no `localStorage`, no query params).
 
 ## Milestone 4 — packaging & container readiness
 
@@ -359,49 +441,59 @@ product logic. It adds a Docker image, a `.dockerignore`, and an optional,
 
 ### Build & run the container
 
-```bash
-docker build -t noxus-agentsecops:local .
+The image is a **multi-stage build**: a Node stage builds the React SPA, and the
+Python stage installs the backend and bundles the built static files. The final
+runtime serves everything from one non-root `uvicorn` process.
 
-# Start the local Streamlit demo UI (default command):
-docker run --rm -p 8501:8501 \
-  -e NOXUS_STREAMLIT_PORT=8501 \
-  noxus-agentsecops:local
+```bash
+docker build -t noxus-agentsecops:react-local .
+
+# Start the React cockpit + API (default command, default port 8787):
+docker run --rm -p 8787:8787 \
+  -e NOXUS_API_PORT=8787 \
+  noxus-agentsecops:react-local
+# open http://localhost:8787
 ```
 
-Override the Streamlit port:
+Override the port:
 
 ```bash
-docker run --rm -p 9000:9000 -e NOXUS_STREAMLIT_PORT=9000 noxus-agentsecops:local
+docker run --rm -p 9000:9000 -e NOXUS_API_PORT=9000 noxus-agentsecops:react-local
 ```
 
-Pass LLM env vars for agent-assisted mode (deterministic mode needs none):
+In the **web UI**, Agent-Assisted Mode is configured in-app (provider type, base
+URL, API key, models) — no environment variables are needed. The **CLI** path
+still reads `NOXUS_LLM_*` env vars and can be run inside the container via a
+command override (deterministic mode needs none):
 
 ```bash
-docker run --rm -p 8501:8501 \
+# Agent-assisted CLI inside the container (env-var provider config):
+docker run --rm \
   -e NOXUS_LLM_BASE_URL=http://host.docker.internal:4000/v1 \
   -e NOXUS_LLM_API_KEY=sk-local \
   -e NOXUS_RED_MODEL=gemini-3.5-flash \
   -e NOXUS_JUDGE_MODEL=gemini-3.5-flash \
   -e NOXUS_TUNING_MODEL=gemini-3.1-pro-preview \
-  noxus-agentsecops:local
-```
+  noxus-agentsecops:react-local \
+  noxus run --mode agent-assisted \
+    --system-prompt src/noxus/samples/system_prompt.txt \
+    --policy src/noxus/samples/security_policy.yaml \
+    --business-context src/noxus/samples/business_context.md
 
-Run the deterministic CLI inside the container (command override):
-
-```bash
-docker run --rm noxus-agentsecops:local \
+# Deterministic CLI inside the container (no credentials):
+docker run --rm noxus-agentsecops:react-local \
   noxus run --mode deterministic \
     --system-prompt src/noxus/samples/system_prompt.txt \
     --policy src/noxus/samples/security_policy.yaml \
     --business-context src/noxus/samples/business_context.md
 ```
 
-The image is based on `python:3.11-slim`, runs as the non-root user
-`noxus_user`, sets `PYTHONDONTWRITEBYTECODE=1` / `PYTHONUNBUFFERED=1`, and copies
-only `pyproject.toml`, `README.md`, and `src/`. `.dockerignore` keeps
-`.git/`, `.venv/`, caches, `outputs/`, `reports/`, `tmp/`, `*.log`, `.env*`, and
-`tests/` out of the image (while keeping `src/`, `pyproject.toml`, `README.md`,
-and the sample files).
+The final image is based on `python:3.11-slim`, runs as the non-root user
+`noxus_user`, sets `PYTHONDONTWRITEBYTECODE=1` / `PYTHONUNBUFFERED=1`, and bundles
+the built React SPA under `/app/web_static`. `.dockerignore` keeps `.git/`,
+`.venv/`, caches, `node_modules/`, `outputs/`, `reports/`, `tmp/`, `*.log`,
+`.env*`, and `tests/` out of the image (while keeping `src/`, `pyproject.toml`,
+`README.md`, and the sample files).
 
 ### Optional local JSONL audit export (opt-in)
 
@@ -432,4 +524,4 @@ append_audit_jsonl(report, "outputs/audit/readiness_reports.jsonl")
 
 Docker builds are documented and manually runnable; the automated tests validate
 the Dockerfile/.dockerignore **statically** and never require Docker, a network,
-cloud credentials, or a running Streamlit server.
+cloud credentials, or a running web server.

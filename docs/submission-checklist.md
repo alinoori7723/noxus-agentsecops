@@ -16,21 +16,26 @@ git tag --list
 
 ## Tests
 
-- [ ] Full suite green (expected: **89 passed**).
+- [ ] Full suite green (expected: **152 passed** with dev extras installed).
+- [ ] Frontend tests green (5 Vitest tests).
 
 ```bash
-PYTHONPATH=src python3 -m pytest -q
+python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest -q          # 152 passed (httpx from dev extras)
+cd apps/web && npm ci && npm run test && cd -
 ```
 
 ## Docker
 
-- [ ] Image builds.
-- [ ] Container starts the Streamlit UI on the expected port.
+- [ ] Image builds (multi-stage: Node builds the SPA, Python serves it).
+- [ ] Container starts the React cockpit + FastAPI API on port 8787.
 - [ ] Runs as non-root (`noxus_user`).
+- [ ] `GET /api/health` returns ok; `/` serves the SPA.
 
 ```bash
-docker build -t noxus-agentsecops:local .
-docker run --rm -p 8501:8501 noxus-agentsecops:local
+docker build -t noxus-agentsecops:react-local .
+docker run --rm -p 8787:8787 noxus-agentsecops:react-local
+# open http://localhost:8787
 ```
 
 ## CLI
@@ -45,10 +50,14 @@ PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src
 
 ## UI
 
-- [ ] `streamlit run src/noxus/ui_streamlit.py` (or container) loads.
+- [ ] React cockpit loads (dev `http://localhost:5173`, or built/container
+      `http://localhost:8787`).
 - [ ] Deterministic Mode works without credentials.
-- [ ] Edits to prompt/policy/context persist across reruns.
+- [ ] Agent-Assisted provider panel works (password API-key field, Gemini presets).
+- [ ] Edits to prompt/policy/context persist in the session.
 - [ ] Open risks and honest labels are visible.
+- [ ] Traversal blocked: `curl --path-as-is http://localhost:8787/../pyproject.toml`
+      returns 404.
 
 ## Audit export
 
@@ -70,7 +79,7 @@ PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src
 
 ### Screenshot / screen-recording checklist
 
-- [ ] Streamlit header (readiness-tester, not-a-firewall note).
+- [ ] React cockpit header (readiness-tester, not-a-firewall note).
 - [ ] Target Configuration panel (weak policy visible).
 - [ ] Red/Blue dashboard — red side (failing probes + evidence).
 - [ ] `[DETERMINISTIC SIMULATION]` label close-up.

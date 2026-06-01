@@ -7,7 +7,7 @@ DOCKERFILE = PROJECT_ROOT / "Dockerfile"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
-ALLOWED_RUNTIME_DEPENDENCIES = {"pydantic", "PyYAML", "streamlit"}
+ALLOWED_RUNTIME_DEPENDENCIES = {"pydantic", "PyYAML", "fastapi", "uvicorn"}
 
 FORBIDDEN_DEPENDENCIES = {
     "vertexai",
@@ -16,7 +16,7 @@ FORBIDDEN_DEPENDENCIES = {
     "google-cloud-bigquery",
     "google-cloud-storage",
     "langgraph",
-    "fastapi",
+    "streamlit",
     "requests",
     "httpx",
     "openai",
@@ -69,10 +69,13 @@ def test_dockerfile_switches_to_non_root_user():
     assert user_directives[-1] != "root"
 
 
-def test_dockerfile_starts_streamlit_by_default():
+def test_dockerfile_starts_api_server_by_default():
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "CMD" in text
-    assert "streamlit run src/noxus/ui_streamlit.py" in text
+    # The container serves the FastAPI app (which also serves the built SPA),
+    # not Streamlit. uvicorn runs the noxus.api_server ASGI app.
+    assert "noxus.api_server" in text
+    assert "streamlit" not in text
 
 
 def test_dockerignore_excludes_local_artifacts():
@@ -116,6 +119,11 @@ def test_dockerignore_does_not_exclude_required_source_files():
     assert not overlap, f".dockerignore must not exclude required files: {overlap}"
 
 
+# httpx is permitted as a TEST-ONLY dependency (fastapi.testclient transport).
+# It must never be a runtime dependency or imported by runtime source.
+ALLOWED_DEV_ONLY_DEPENDENCIES = {"pytest", "httpx"}
+
+
 def test_pyproject_does_not_add_forbidden_cloud_dependencies():
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     deps = data["project"]["dependencies"]
@@ -123,8 +131,40 @@ def test_pyproject_does_not_add_forbidden_cloud_dependencies():
     assert names <= ALLOWED_RUNTIME_DEPENDENCIES, (
         f"unexpected runtime dependencies: {names - ALLOWED_RUNTIME_DEPENDENCIES}"
     )
+    # httpx must NOT be a runtime dependency.
+    assert "httpx" not in names
     assert not (names & FORBIDDEN_DEPENDENCIES)
-    # Also guard the raw text (covers optional-dependencies / extras).
+    # Raw-text guard for optional-dependencies / extras — everything forbidden
+    # EXCEPT the explicitly allowed dev-only test deps (httpx).
     text = PYPROJECT.read_text(encoding="utf-8")
-    for forbidden in FORBIDDEN_DEPENDENCIES:
+    for forbidden in FORBIDDEN_DEPENDENCIES - ALLOWED_DEV_ONLY_DEPENDENCIES:
         assert forbidden not in text, f"forbidden dependency in pyproject: {forbidden}"
+
+
+def test_httpx_is_dev_only_not_runtime():
+    data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
+    runtime = {
+        re.split(r"[<>=!~ ]", d, 1)[0].strip()
+        for d in data["project"]["dependencies"]
+    }
+    dev = {
+        re.split(r"[<>=!~ ]", d, 1)[0].strip()
+        for d in data["project"]["optional-dependencies"]["dev"]
+    }
+    assert "httpx" in dev
+    assert "httpx" not in runtime
+
+
+def test_dockerfile_copies_package_lock():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "package-lock.json" in text, "Docker build must copy the lockfile"
+
+
+def test_dockerfile_uses_npm_ci():
+    assert any(line.startswith("RUN npm ci") for line in _dockerfile_lines())
+
+
+def test_dockerfile_does_not_run_npm_install_for_frontend_build():
+    # `npm install` would bypass the committed lockfile and allow drift.
+    # Scan command lines only (comments are stripped by _dockerfile_lines()).
+    assert not any("npm install" in line for line in _dockerfile_lines())

@@ -27,6 +27,14 @@ tmp/
 # Tests are not needed in the runtime image
 tests/
 
+# Frontend deps / build artifacts (rebuilt inside the Docker build stage)
+node_modules/
+**/node_modules/
+apps/web/dist/
+
+# Claude harness / session settings
+.claude/
+
 # Local environment files
 .env
 .env.*

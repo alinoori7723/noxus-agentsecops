@@ -49,8 +49,9 @@ It closes the loop with bounded, cooperating agents:
 - The LLM **cannot directly mutate** YAML or prompts — only the deterministic
   patch engine applies changes.
 - An **AST/static scope guard** blocks forbidden cloud/provider SDK imports and
-  keeps Streamlit isolated to the UI module.
-- **89 automated tests**, including 35 deterministic regression tests.
+  keeps the web framework (FastAPI) isolated to the API adapter (`api_server.py`).
+- **152 automated tests**, including 35 deterministic regression tests, plus a
+  Vitest frontend suite.
 
 ## G. Google ecosystem fit
 

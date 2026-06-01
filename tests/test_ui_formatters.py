@@ -266,7 +266,9 @@ def test_no_safety_rail_placeholder_in_ui_sources():
     from pathlib import Path
 
     src = Path(__file__).resolve().parents[1] / "src" / "noxus"
-    for name in ("ui_formatters.py", "ui_streamlit.py"):
+    # The view layer is now React; the Python sources that build display data
+    # must never carry a synthesized safety-rail placeholder.
+    for name in ("ui_formatters.py", "api_core.py", "api_server.py"):
         text = (src / name).read_text(encoding="utf-8")
         assert _PLACEHOLDER not in text, f"fake placeholder present in {name}"
         assert _PLACEHOLDER_FULL not in text, f"fake placeholder present in {name}"

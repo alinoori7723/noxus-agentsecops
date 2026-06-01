@@ -14,7 +14,7 @@ firewall**, and the demo intentionally starts by failing and ends at
 > pre-production security readiness tester — **not** a runtime firewall and
 > **not** a compliance certification engine."
 
-Show the Streamlit header (`Pre-production readiness tester, not a runtime firewall`).
+Show the React cockpit header (`Pre-production readiness tester, not a runtime firewall`) at http://localhost:8787.
 
 ## 2. Target app setup (≈20s)
 
@@ -29,8 +29,8 @@ Open the **Target Configuration** panel and show the three inputs:
 
 ## 3. Red Team phase (≈35s)
 
-Click **Run Assessment** (Deterministic Mode). Show the probes on the red side of
-the dashboard.
+Click **Run Readiness Assessment** (Deterministic Mode). Show the probes on the
+red side of the dashboard.
 
 > "Noxus runs structured probes — indirect prompt injection, PII leakage, fake
 > secret exfiltration, customer-identifier leakage, proprietary-context exposure.
@@ -75,12 +75,13 @@ Point at the open-risk line for `proprietary_context_exposure`.
 
 ## 7. Engineering proof (≈25s)
 
-> "Under the hood: 89 passing tests, including 35 deterministic regression tests.
-> Every LLM output is validated against Pydantic schemas with one bounded repair
-> attempt — failure routes to `HUMAN_REVIEW_REQUIRED`. The loop is bounded at
-> `MAX_TUNING_ITERATIONS = 2`. An AST static scope guard blocks forbidden cloud
-> SDKs and keeps Streamlit isolated. And there's an opt-in, local-only JSONL
-> audit export."
+> "Under the hood: 152 passing tests, including 35 deterministic regression tests,
+> plus a Vitest frontend suite. Every LLM output is validated against Pydantic
+> schemas with one bounded repair attempt — failure routes to
+> `HUMAN_REVIEW_REQUIRED`. The loop is bounded at `MAX_TUNING_ITERATIONS = 2`. An
+> AST static scope guard blocks forbidden cloud SDKs and keeps the web framework
+> isolated to the API adapter. And there's an opt-in, local-only JSONL audit
+> export."
 
 ## 8. Closing (≈20s)
 

@@ -115,6 +115,89 @@ class LiteLLMProvider:
             raise ProviderError(f"Malformed response from LLM endpoint: {exc}") from exc
 
 
+class GeminiNativeProvider:
+    """Gemini native (Generative Language API) client backed by urllib only.
+
+    Speaks the native ``v1beta/models/{model}:generateContent`` wire format. No
+    Google SDKs, no requests/httpx — standard library only, mirroring
+    ``LiteLLMProvider``. The API key is sent in the ``x-goog-api-key`` request
+    header (never in the URL query string) for that single request and is never
+    logged or stored elsewhere.
+    """
+
+    DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: Optional[str] = None,
+        timeout: float = DEFAULT_TIMEOUT,
+    ) -> None:
+        if not api_key:
+            raise ProviderError("GeminiNativeProvider requires a non-empty api_key.")
+        self.api_key = api_key
+        self.base_url = (base_url or self.DEFAULT_BASE_URL).rstrip("/")
+        self.timeout = timeout
+
+    def _endpoint(self, model: str) -> str:
+        # The model id may already carry a "models/" prefix; normalize it.
+        name = model[len("models/"):] if model.startswith("models/") else model
+        return f"{self.base_url}/v1beta/models/{name}:generateContent"
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        json_schema_instruction: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> str:
+        system_content = system_prompt
+        if json_schema_instruction:
+            system_content = f"{system_prompt}\n\n{json_schema_instruction}"
+
+        payload = {
+            "system_instruction": {"parts": [{"text": system_content}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {"temperature": 0},
+        }
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            self._endpoint(model),
+            data=data,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                # API key travels in a request header, never in logs or the URL.
+                "x-goog-api-key": self.api_key,
+            },
+        )
+        effective_timeout = self.timeout if timeout is None else timeout
+        try:
+            with urllib.request.urlopen(request, timeout=effective_timeout) as resp:
+                body = resp.read().decode("utf-8")
+        except urllib.error.HTTPError as exc:
+            # Never include the response body (could echo request content); just
+            # the status. Avoids leaking anything sensitive into error surfaces.
+            raise ProviderError(
+                f"HTTP error from Gemini endpoint: {exc.code} {exc.reason}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise ProviderError(
+                f"Network error contacting Gemini endpoint: {exc.reason}"
+            ) from exc
+        except socket.timeout as exc:
+            raise ProviderError("Gemini request timed out.") from exc
+
+        try:
+            parsed = json.loads(body)
+            parts = parsed["candidates"][0]["content"]["parts"]
+            return "".join(part.get("text", "") for part in parts)
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(f"Malformed response from Gemini endpoint: {exc}") from exc
+
+
 class FakeLLMProvider:
     """Deterministic in-memory provider for tests (no network).
 
