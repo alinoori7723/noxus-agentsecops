@@ -2,7 +2,7 @@ import pytest
 
 import m2_data
 from noxus.agents import PolicyTuningAgent, RedTeamAgent, SemanticJudgeAgent
-from noxus.json_contracts import SchemaContractError
+from noxus.errors import SchemaContractError
 from noxus.llm_provider import FakeLLMProvider
 from noxus.orchestrator import run_readiness_assessment
 from noxus.schemas import (

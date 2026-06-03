@@ -1,10 +1,17 @@
 import { useState } from "react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { Overview } from "../components/Overview";
 import { Sidebar } from "../components/Sidebar";
 import { AssessmentPanel } from "../components/AssessmentPanel";
-import { ProviderSettings, type ProviderTestState } from "../components/ProviderSettings";
+import {
+  ProviderSettings,
+  baseUrlError,
+  BASE_URL_SCHEME_ERROR,
+  type ProviderTestState,
+} from "../components/ProviderSettings";
+import { PolicyError } from "../components/PolicyError";
+import type { PolicyErrorDetail } from "../types/noxus";
 import { ReadinessSummary } from "../components/ReadinessSummary";
 import { OpenRisks } from "../components/OpenRisks";
 import { RedBlueDashboard } from "../components/RedBlueDashboard";
@@ -65,6 +72,7 @@ function AssessmentHarness() {
       error={null}
       providerTestOk={false}
       providerTestStale={false}
+      providerConfigError={null}
     />
   );
 }
@@ -150,7 +158,7 @@ describe("ProviderSettings", () => {
     );
     expect(screen.getByText(/Provider diagnostics/i)).toBeInTheDocument();
     expect(screen.getByText(/all models ok/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/valid JSON/i).length).toBe(3);
+    expect(screen.getAllByText(/schema contract ok/i).length).toBe(3);
   });
 
   it("renders a failed provider diagnostic result with a sanitized message", () => {
@@ -161,7 +169,7 @@ describe("ProviderSettings", () => {
       />,
     );
     expect(screen.getByText(/issues found/i)).toBeInTheDocument();
-    expect(screen.getByText(/Provider call failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/did not satisfy the red schema contract/i)).toBeInTheDocument();
   });
 
   it("does not persist the API key to web storage", () => {
@@ -229,5 +237,151 @@ describe("RedBlueDashboard", () => {
     expect(
       screen.queryByText(/<critical safety rail clause>/i),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("baseUrlError", () => {
+  it("rejects a base URL without an http(s) scheme", () => {
+    expect(
+      baseUrlError({ provider_type: "local_openai_compatible", base_url: "localhost:4000/v1" }),
+    ).toBe(BASE_URL_SCHEME_ERROR);
+    expect(
+      baseUrlError({ provider_type: "openai_compatible", base_url: "localhost:4000/v1" }),
+    ).toBe(BASE_URL_SCHEME_ERROR);
+  });
+
+  it("accepts http/https, blank-local, and gemini (no base URL)", () => {
+    expect(
+      baseUrlError({ provider_type: "local_openai_compatible", base_url: "http://localhost:4000/v1" }),
+    ).toBeNull();
+    expect(baseUrlError({ provider_type: "local_openai_compatible", base_url: "" })).toBeNull();
+    expect(baseUrlError({ provider_type: "gemini_native" })).toBeNull();
+  });
+});
+
+describe("ProviderSettings base URL validation", () => {
+  it("shows an inline error and disables Test (no call) when the scheme is missing", () => {
+    const onTest = vi.fn();
+    render(
+      <ProviderSettings
+        provider={{
+          provider_type: "openai_compatible",
+          base_url: "localhost:4000/v1",
+          api_key: "k",
+        }}
+        onChange={() => {}}
+        testState={{ status: "idle", response: null, error: null, stale: false }}
+        onTest={onTest}
+      />,
+    );
+    expect(screen.getByText(BASE_URL_SCHEME_ERROR)).toBeInTheDocument();
+    const btn = screen.getByRole("button", { name: /Test provider connection/i });
+    expect(btn).toBeDisabled();
+    fireEvent.click(btn);
+    expect(onTest).not.toHaveBeenCalled();
+  });
+
+  it("shows local + Docker helper examples when the base URL is valid", () => {
+    render(
+      <ProviderSettings
+        provider={{ provider_type: "local_openai_compatible", base_url: "http://localhost:4000/v1", api_key: "k" }}
+        onChange={() => {}}
+        testState={{ status: "idle", response: null, error: null, stale: false }}
+        onTest={() => {}}
+      />,
+    );
+    expect(screen.getByText(/host\.docker\.internal:4000\/v1/i)).toBeInTheDocument();
+  });
+});
+
+const policyDetail: PolicyErrorDetail = {
+  message: "Security Policy YAML does not match the supported Noxus policy schema.",
+  code: "policy_schema",
+  unsupported_keys: ["unsupported_top", "sensitive_data.bogus_nested"],
+  allowed_keys: ["sensitive_data", "prompt_injection", "output_policy", "human_review"],
+  example_yaml: "sensitive_data:\n  block: []\n  mask: []\n",
+};
+
+describe("PolicyError", () => {
+  it("renders a friendly validation message and the unsupported keys", () => {
+    render(<PolicyError detail={policyDetail} onResetPolicy={() => {}} />);
+    expect(
+      screen.getByText(/does not match the supported Noxus policy schema/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("unsupported_top")).toBeInTheDocument();
+    expect(screen.getByText("sensitive_data.bogus_nested")).toBeInTheDocument();
+  });
+
+  it("does not render a raw Pydantic URL or raw validation dump", () => {
+    render(<PolicyError detail={policyDetail} onResetPolicy={() => {}} />);
+    expect(screen.queryByText(/errors\.pydantic\.dev/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Extra inputs are not permitted/i)).not.toBeInTheDocument();
+  });
+
+  it("invokes onResetPolicy when Reset policy to sample is clicked", () => {
+    const onReset = vi.fn();
+    render(<PolicyError detail={policyDetail} onResetPolicy={onReset} />);
+    fireEvent.click(screen.getByRole("button", { name: /Reset policy to sample/i }));
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+});
+
+import { PartialRunBanner } from "../components/PartialRunBanner";
+import { agentTracePartialFailure, schemaFailure } from "./fixtures";
+
+describe("PartialRunBanner (HUMAN_REVIEW_REQUIRED partial)", () => {
+  it("shows the failed agent stage and that the deterministic baseline is preserved", () => {
+    render(<PartialRunBanner failure={schemaFailure} />);
+    expect(screen.getByText(/Red Team Agent failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/HUMAN_REVIEW_REQUIRED/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/deterministic baseline.*completed/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/5 probes, 6 findings/)).toBeInTheDocument();
+  });
+
+  it("keeps the sanitized excerpt collapsed and free of API keys", () => {
+    const withFakeKey = { ...schemaFailure, debug_excerpt: "garbage Bearer ***REDACTED*** tail" };
+    render(<PartialRunBanner failure={withFakeKey} />);
+    // Collapsed by default.
+    expect(screen.queryByText(/garbage Bearer/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Schema contract failure details/i));
+    expect(screen.getByText(/garbage Bearer \*\*\*REDACTED\*\*\* tail/)).toBeInTheDocument();
+    expect(screen.queryByText(/sk-[A-Za-z0-9]/)).not.toBeInTheDocument();
+  });
+});
+
+describe("RoleObservability partial failure", () => {
+  it("marks the failed agent role as failed", () => {
+    render(
+      <RoleObservability trace={agentTracePartialFailure} evidence={evidenceWithProprietaryRisk} />,
+    );
+    expect(screen.getByText("Red Team Agent")).toBeInTheDocument();
+    expect(screen.getAllByText(/failed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/not used/i).length).toBeGreaterThan(0);
+  });
+});
+
+describe("Provider diagnostics role-vs-generic distinction", () => {
+  it("shows a role schema contract failure, not a generic JSON success", () => {
+    render(
+      <ProviderHarness
+        type="openai_compatible"
+        testState={{ status: "done", response: providerTestFailure, error: null, stale: false }}
+      />,
+    );
+    expect(screen.getByText(/schema contract failed/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/did not satisfy the red schema contract/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a role schema contract success", () => {
+    render(
+      <ProviderHarness
+        testState={{ status: "done", response: providerTestSuccess, error: null, stale: false }}
+      />,
+    );
+    expect(screen.getAllByText(/schema contract ok/i).length).toBe(3);
   });
 });

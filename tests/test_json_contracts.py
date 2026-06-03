@@ -1,8 +1,8 @@
 import pytest
 
 import m2_data
+from noxus.errors import SchemaContractError
 from noxus.json_contracts import (
-    SchemaContractError,
     load_validated_object,
     parse_json_object,
     validate_model_object,
@@ -52,9 +52,15 @@ def test_schema_contract_error_bubbles_to_orchestrator_human_review_required():
         provider=provider,
     )
     assert report.readiness_state is ReadinessState.HUMAN_REVIEW_REQUIRED
-    assert any("SchemaContractError" in risk for risk in report.open_risks)
+    assert any("failed schema validation" in risk for risk in report.open_risks)
+    assert report.human_review_requirements == ["schema_contract_failure"]
     # No dirty continuation: no patches applied.
     assert report.patch_operations_applied == []
+    # Deterministic baseline is PRESERVED (no blank telemetry) and the failed
+    # stage/role is recorded for the UI.
+    assert report.before_results, "deterministic baseline must be preserved"
+    assert report.metadata.failed_role == "red"
+    assert report.metadata.failed_stage == "red_team_generation"
 
 
 def test_parse_and_validate_helpers_directly():

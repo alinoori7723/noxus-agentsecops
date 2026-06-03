@@ -172,16 +172,24 @@ def spa_client(tmp_path, monkeypatch):
     (static / "assets").mkdir(parents=True)
     (static / "index.html").write_text("INDEX_SPA_MARKER", encoding="utf-8")
     (static / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
+    (static / "favicon.ico").write_text("icon", encoding="utf-8")
     # Secret sibling outside the static root that must never be served.
     (tmp_path / "secret.txt").write_text("TOPSECRET_OUTSIDE_ROOT", encoding="utf-8")
     monkeypatch.setenv("NOXUS_WEB_DIST", str(static))
     return TestClient(create_app())
 
 
-def test_spa_fallback_serves_index_for_safe_frontend_route(spa_client):
-    r = spa_client.get("/dashboard/settings")
+def test_spa_fallback_serves_index_for_allowlisted_route(spa_client):
+    # An allowlisted client route receives the SPA shell...
+    r = spa_client.get("/assessment")
     assert r.status_code == 200
     assert "INDEX_SPA_MARKER" in r.text
+
+
+def test_spa_fallback_rejects_unknown_nested_route(spa_client):
+    # ...but a non-allowlisted (and file-looking) deep path must 404, not index.
+    r = spa_client.get("/dashboard/settings")
+    assert r.status_code == 404
 
 
 def test_static_file_serving_is_confined_to_static_root(spa_client, tmp_path):
@@ -335,3 +343,176 @@ def test_run_response_includes_agent_trace(client):
     trace = body["agent_trace"]
     stages = {st["stage"] for st in trace["stages"]}
     assert {"red_team", "semantic_judge", "policy_tuning", "patch_application"} <= stages
+
+
+# --------------------------------------------------------------------------- #
+# Clean validation errors (base URL + policy schema)
+# --------------------------------------------------------------------------- #
+def test_run_endpoint_invalid_base_url_returns_clean_400(client):
+    s = client.get("/api/sample-inputs").json()
+    r = client.post(
+        "/api/assessments/run",
+        json={
+            "mode": "agent_assisted",
+            "system_prompt": s["system_prompt"],
+            "security_policy_yaml": s["security_policy_yaml"],
+            "business_context": s["business_context"],
+            "provider_config": {
+                "provider_type": "openai_compatible",
+                "base_url": "localhost:4000/v1",
+                "api_key": "k",
+                "red_model": "m",
+                "judge_model": "m",
+                "tuning_model": "m",
+            },
+        },
+    )
+    assert r.status_code == 400
+    assert "http://" in r.text
+    assert "unknown url type" not in r.text.lower()
+
+
+def test_run_endpoint_unsupported_policy_returns_structured_400(client):
+    s = client.get("/api/sample-inputs").json()
+    r = client.post(
+        "/api/assessments/run",
+        json={
+            "mode": "deterministic",
+            "system_prompt": s["system_prompt"],
+            "security_policy_yaml": "bogus_top: true\n",
+            "business_context": s["business_context"],
+        },
+    )
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert isinstance(detail, dict)
+    assert detail["code"] == "policy_schema"
+    assert "bogus_top" in detail["unsupported_keys"]
+    assert detail["allowed_keys"]
+    # No raw Pydantic dump leaks to the client.
+    assert "pydantic" not in r.text.lower()
+    assert "Extra inputs are not permitted" not in r.text
+
+
+def test_provider_test_endpoint_invalid_base_url_returns_400(client):
+    r = client.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {
+                "provider_type": "openai_compatible",
+                "base_url": "localhost:4000/v1",
+                "api_key": "k",
+                "red_model": "m",
+            },
+            "models_to_test": ["red"],
+        },
+    )
+    assert r.status_code == 400
+    assert "http://" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# Provider test endpoint — REAL role-schema contract validation
+# --------------------------------------------------------------------------- #
+import m2_data  # noqa: E402
+from noxus import api_core as _api_core  # noqa: E402
+from noxus.llm_provider import FakeLLMProvider  # noqa: E402
+
+
+def test_provider_test_endpoint_validates_real_role_schemas(client, monkeypatch):
+    fake = FakeLLMProvider(
+        red=m2_data.VALID_PROBE_BATCH,
+        judge=m2_data.VALID_JUDGMENT_VIOLATION,
+        tuning=m2_data.EMPTY_PATCHSET,
+    )
+    monkeypatch.setattr(
+        _api_core, "build_provider",
+        lambda cfg: (fake, {"red_model": "r", "judge_model": "j", "tuning_model": "t"}),
+    )
+    r = client.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {"provider_type": "gemini_native", "api_key": _SENTINEL_KEY},
+            "models_to_test": ["red", "judge", "tuning"],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert all(res["ok"] and "schema contract" in res["message"] for res in body["results"])
+    assert _SENTINEL_KEY not in r.text
+
+
+def test_provider_test_endpoint_generic_json_fails_role_contract(client, monkeypatch):
+    fake = FakeLLMProvider(default='{"noxus_provider_check": true}')
+    monkeypatch.setattr(
+        _api_core, "build_provider",
+        lambda cfg: (fake, {"red_model": "r", "judge_model": "j", "tuning_model": "t"}),
+    )
+    r = client.post(
+        "/api/providers/test",
+        json={
+            "provider_config": {"provider_type": "gemini_native", "api_key": _SENTINEL_KEY},
+            "models_to_test": ["red"],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    res = body["results"][0]
+    assert res["response_validated"] is False
+    assert "did not satisfy the red schema contract" in res["message"]
+    assert res["debug_excerpt"]
+    assert _SENTINEL_KEY not in r.text
+
+
+# --------------------------------------------------------------------------- #
+# SPA fallback (Codex blocker #3): only allowlisted client routes get the SPA
+# shell; filesystem-looking paths must 404, never the index. (Reuses the
+# module-level ``spa_client`` fixture defined above.)
+# --------------------------------------------------------------------------- #
+def test_spa_fallback_allows_root(spa_client):
+    r = spa_client.get("/")
+    assert r.status_code == 200
+    assert "INDEX_SPA_MARKER" in r.text
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/overview", "/assessment", "/results", "/evidence", "/open-risks",
+     "/provider-settings", "/engineering-proof", "/target-config"],
+)
+def test_spa_fallback_allows_known_frontend_routes(spa_client, route):
+    r = spa_client.get(route)
+    assert r.status_code == 200
+    assert "INDEX_SPA_MARKER" in r.text
+
+
+def test_spa_fallback_serves_real_static_asset(spa_client):
+    assert spa_client.get("/favicon.ico").status_code == 200
+    assert spa_client.get("/assets/app.js").status_code == 200
+
+
+def test_spa_fallback_rejects_etc_passwd(spa_client):
+    assert spa_client.get("/etc/passwd").status_code == 404
+
+
+def test_spa_fallback_rejects_app_pyproject(spa_client):
+    assert spa_client.get("/app/pyproject.toml").status_code == 404
+
+
+def test_spa_fallback_rejects_src_backend_path(spa_client):
+    assert spa_client.get("/src/noxus/api_core.py").status_code == 404
+
+
+def test_spa_fallback_rejects_unknown_file_like_path(spa_client):
+    assert spa_client.get("/package.json").status_code == 404
+    assert spa_client.get("/dashboard").status_code == 404
+
+
+def test_spa_fallback_rejects_encoded_traversal(spa_client):
+    # %2e%2e/ decodes to ../ ; must not escape or be treated as a client route.
+    r = spa_client.get("/%2e%2e/pyproject.toml")
+    assert r.status_code == 404
+    r2 = spa_client.get("/../pyproject.toml")
+    assert r2.status_code == 404

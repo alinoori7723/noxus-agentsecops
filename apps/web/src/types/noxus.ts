@@ -201,6 +201,17 @@ export interface ProviderTestRoleResult {
   latency_ms: number;
   response_validated: boolean;
   message: string;
+  debug_excerpt: string | null;
+}
+
+export interface SchemaFailure {
+  failed_stage: string | null;
+  failed_role: AgentRole | null;
+  debug_excerpt: string | null;
+  baseline_preserved: boolean;
+  baseline_probe_count: number;
+  baseline_finding_count: number;
+  reason: string;
 }
 
 export interface ProviderTestResponse {
@@ -219,6 +230,7 @@ export interface AssessmentResponse {
   agent_trace: AgentTrace;
   execution_mode: string;
   provider_type: string | null;
+  schema_failure: SchemaFailure | null;
   metadata: {
     mode: string;
     tuning_iterations: number;
@@ -229,4 +241,12 @@ export interface AssessmentResponse {
 
 export interface ApiErrorBody {
   detail?: string;
+}
+
+export interface PolicyErrorDetail {
+  message: string;
+  code: "policy_schema" | "policy_yaml";
+  unsupported_keys?: string[];
+  allowed_keys?: string[];
+  example_yaml?: string;
 }

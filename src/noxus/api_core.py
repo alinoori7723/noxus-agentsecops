@@ -71,18 +71,8 @@ ROLE_PURPOSE = {
     "tuning": "Proposes schema-bound patches",
 }
 
-# Provider connectivity probe: a tiny structured-JSON round-trip that proves a
-# real model/API call happened, without running an assessment or mutating state.
+# Short timeout for the per-role provider connectivity/contract probe.
 PROVIDER_TEST_TIMEOUT = 12.0
-_PROBE_SYSTEM = (
-    "You are a connectivity probe for a security tool. Reply with ONLY a single "
-    "compact JSON object and nothing else."
-)
-_PROBE_USER = 'Return exactly this JSON object: {"noxus_provider_check": true}'
-_PROBE_SCHEMA = (
-    'Output must be exactly one JSON object: {"noxus_provider_check": true}. '
-    "No prose, no markdown, no code fences."
-)
 
 
 class ApiError(Exception):
@@ -90,12 +80,23 @@ class ApiError(Exception):
 
     The ``message`` is guaranteed safe to return to the client: it never
     contains the caller's API key (provider construction errors are rephrased).
+    An optional ``code`` + ``details`` carry safe, structured context (e.g. the
+    unsupported policy keys) so the UI can render a clean, friendly error.
     """
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        code: Optional[str] = None,
+        details: Optional[dict] = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.message = message
+        self.code = code
+        self.details = details or {}
 
 
 # --------------------------------------------------------------------------- #
@@ -207,18 +208,100 @@ def proof_indicators(test_count: Optional[int] = None) -> dict:
     }
 
 
+POLICY_SCHEMA_MESSAGE = (
+    "Security Policy YAML does not match the supported Noxus policy schema."
+)
+# A real, minimal policy that validates against SecurityPolicy. Shown to the user
+# as the expected shape (the supported top-level keys are derived from the model).
+MINIMAL_POLICY_EXAMPLE = (
+    "sensitive_data:\n"
+    "  block: []\n"
+    "  mask: []\n"
+    "prompt_injection:\n"
+    "  mode: basic\n"
+    "  detect_indirect_instructions: false\n"
+    "output_policy:\n"
+    "  block_confidential: true\n"
+    "human_review:\n"
+    "  required_categories: []\n"
+)
+
+
+def supported_policy_keys() -> list[str]:
+    """The supported top-level keys, sourced from the SecurityPolicy schema."""
+    from .schemas import SecurityPolicy
+
+    return list(SecurityPolicy.model_fields.keys())
+
+
+def _policy_schema_error(raw: dict, exc: Exception) -> ApiError:
+    """Build a clean, structured policy-validation error (no raw Pydantic dump)."""
+    allowed = supported_policy_keys()
+    unsupported: list[str] = []
+    # Prefer precise, structured locations from Pydantic (incl. nested keys).
+    errors = getattr(exc, "errors", None)
+    if callable(errors):
+        for e in exc.errors():
+            if e.get("type") == "extra_forbidden":
+                loc = ".".join(str(p) for p in e.get("loc", ()))
+                if loc:
+                    unsupported.append(loc)
+    if not unsupported and isinstance(raw, dict):
+        unsupported = [k for k in raw.keys() if k not in allowed]
+    return ApiError(
+        400,
+        POLICY_SCHEMA_MESSAGE,
+        code="policy_schema",
+        details={
+            "unsupported_keys": unsupported,
+            "allowed_keys": allowed,
+            "example_yaml": MINIMAL_POLICY_EXAMPLE,
+        },
+    )
+
+
 def _parse_policy(security_policy_yaml: str) -> dict:
     try:
         raw = yaml.safe_load(security_policy_yaml) or {}
     except yaml.YAMLError as exc:
-        raise ApiError(400, f"Invalid security policy YAML: {exc}") from exc
+        raise ApiError(
+            400,
+            "Security Policy YAML could not be parsed. Please check the YAML syntax.",
+            code="policy_yaml",
+            details={"example_yaml": MINIMAL_POLICY_EXAMPLE},
+        ) from exc
     if not isinstance(raw, dict):
-        raise ApiError(400, "Security policy must be a YAML mapping.")
+        raise ApiError(
+            400,
+            "Security Policy YAML must be a mapping of keys to values.",
+            code="policy_schema",
+            details={
+                "unsupported_keys": [],
+                "allowed_keys": supported_policy_keys(),
+                "example_yaml": MINIMAL_POLICY_EXAMPLE,
+            },
+        )
     try:
         validate_policy(raw)  # raise early on a malformed policy
-    except Exception as exc:  # pydantic ValidationError -> safe 400
-        raise ApiError(400, f"Security policy failed validation: {exc}") from exc
+    except Exception as exc:  # pydantic ValidationError -> clean structured 400
+        raise _policy_schema_error(raw, exc) from exc
     return raw
+
+
+BASE_URL_SCHEME_ERROR = "Base URL must include http:// or https://"
+
+
+def _validate_base_url(base_url: str) -> None:
+    """Ensure an OpenAI-style base URL has an http(s) scheme and a host.
+
+    Raises a clean ApiError(400) instead of letting urllib raise an opaque
+    'unknown url type: ...' error deep in the provider call.
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse((base_url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ApiError(400, BASE_URL_SCHEME_ERROR)
 
 
 def build_provider(config: Optional[ProviderConfig]) -> tuple[LLMProvider, dict]:
@@ -247,14 +330,15 @@ def build_provider(config: Optional[ProviderConfig]) -> tuple[LLMProvider, dict]
         if provider_type == PROVIDER_GEMINI:
             provider: LLMProvider = GeminiNativeProvider(config.api_key)
         elif provider_type == PROVIDER_LOCAL:
-            provider = LiteLLMProvider(
-                config.base_url or DEFAULT_LOCAL_BASE_URL, config.api_key
-            )
+            base_url = config.base_url or DEFAULT_LOCAL_BASE_URL
+            _validate_base_url(base_url)
+            provider = LiteLLMProvider(base_url, config.api_key)
         else:  # PROVIDER_OPENAI
             if not config.base_url:
                 raise ApiError(
                     400, "openai_compatible provider requires a base_url."
                 )
+            _validate_base_url(config.base_url)
             provider = LiteLLMProvider(config.base_url, config.api_key)
     except ProviderError as exc:
         # ProviderError messages are constructed from non-secret fields only.
@@ -305,14 +389,34 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
     # A schema-contract abort (not just a high-severity finding) is the only case
     # where the agent pipeline itself failed and routed to human review.
     schema_failure = "schema_contract_failure" in list(report.human_review_requirements)
+    failed_role = getattr(report.metadata, "failed_role", None)
+    # Role pipeline order: red -> judge -> tuning. On a schema failure, the failing
+    # role is "failed", earlier roles "used" (they completed), later roles "not_used".
+    _ROLE_ORDER = {"red": 0, "judge": 1, "tuning": 2}
+    failed_idx = _ROLE_ORDER.get(failed_role) if schema_failure else None
+
+    def _agent_status(role: str, default_used: bool, default_not_used_summary: str,
+                      used_summary: str) -> dict:
+        idx = _ROLE_ORDER[role]
+        if failed_idx is not None:
+            if idx == failed_idx:
+                return {"source": "llm", "status": "failed",
+                        "summary": f"{used_summary.split('.')[0]} — failed schema validation."}
+            if idx < failed_idx:
+                return {"source": "llm", "status": "used", "summary": used_summary}
+            return {"source": "llm", "status": "not_used",
+                    "summary": "Not reached — an earlier agent stage failed."}
+        return {"source": "llm",
+                "status": "used" if default_used else "not_used",
+                "summary": used_summary if default_used else default_not_used_summary}
 
     # Red Team
     if is_agent:
-        red = {
-            "source": "llm",
-            "status": "human_review_required" if schema_failure else "used",
-            "summary": "Generated structured probes on top of the deterministic baseline.",
-        }
+        red = _agent_status(
+            "red", True,
+            "Red team did not run.",
+            "Generated structured probes on top of the deterministic baseline.",
+        )
     else:
         red = {
             "source": "deterministic_baseline",
@@ -321,27 +425,23 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
         }
 
     # Semantic Judge
-    if is_agent and schema_failure:
-        judge = {"source": "llm", "status": "human_review_required",
-                 "summary": "Schema-bound judgment aborted; routed to human review."}
-    elif is_agent and semantic_source == "llm":
-        judge = {"source": "llm", "status": "used",
-                 "summary": "Evaluated semantic violations and added judged findings."}
-    elif is_agent:
-        judge = {"source": "llm", "status": "not_used",
-                 "summary": "Ran, but added no semantic findings beyond deterministic checks."}
+    if is_agent:
+        judge = _agent_status(
+            "judge", semantic_source == "llm",
+            "Ran, but added no semantic findings beyond deterministic checks.",
+            "Evaluated semantic violations and added judged findings.",
+        )
     else:
         judge = {"source": "deterministic", "status": "not_used",
                  "summary": "Semantic judge is not used in deterministic mode."}
 
     # Policy Tuning (proposes the patch set)
-    if is_agent and schema_failure:
-        tuning = {"source": "llm", "status": "human_review_required",
-                  "summary": "Patch proposal aborted on a schema-contract failure."}
-    elif is_agent:
-        tuning = {"source": "llm",
-                  "status": "used" if patch_count else "not_used",
-                  "summary": f"Proposed a schema-bound PatchSet ({patch_count} operations)."}
+    if is_agent:
+        tuning = _agent_status(
+            "tuning", patch_count > 0,
+            "Proposed no patches.",
+            f"Proposed a schema-bound PatchSet ({patch_count} operations).",
+        )
     else:
         tuning = {"source": "deterministic_mapper",
                   "status": "used" if patch_count else "not_used",
@@ -381,6 +481,20 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
     """
     effective_mode = mode or getattr(report.metadata, "mode", "deterministic")
     trace = build_agent_trace(report, effective_mode, provider_config)
+    meta = report.metadata
+    schema_failure = None
+    if "schema_contract_failure" in list(report.human_review_requirements):
+        baseline_findings = sum(len(r.findings) for r in report.before_results)
+        schema_failure = {
+            "failed_stage": getattr(meta, "failed_stage", None),
+            "failed_role": getattr(meta, "failed_role", None),
+            # Already sanitized (<=500 chars, secrets redacted) by json_contracts.
+            "debug_excerpt": getattr(meta, "schema_failure_excerpt", None),
+            "baseline_preserved": bool(report.before_results),
+            "baseline_probe_count": len(report.before_results),
+            "baseline_finding_count": baseline_findings,
+            "reason": "schema contract failure",
+        }
     return {
         "readiness": ui_formatters.build_readiness_summary_model(report),
         "timeline": ui_formatters.build_demo_timeline_model(report),
@@ -390,6 +504,7 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "agent_trace": trace,
         "execution_mode": trace["execution_mode"],
         "provider_type": trace["provider_type"],
+        "schema_failure": schema_failure,
         "metadata": {
             "mode": effective_mode,
             "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
@@ -444,29 +559,73 @@ def run_assessment(req: RunAssessmentRequest):
 
 
 # --------------------------------------------------------------------------- #
-# Provider connectivity test (proves a real model/API call; runs no assessment)
+# Provider connectivity test — validates the REAL per-role schema contracts the
+# agents enforce (not just a generic JSON ping), so a "success" here predicts a
+# real agent-assisted run.
 # --------------------------------------------------------------------------- #
-def _validate_probe_response(text: str) -> bool:
-    """True iff the model returned a parseable JSON object (markdown-fence tolerant)."""
-    if not text:
-        return False
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`").strip()
-        if t[:4].lower() == "json":
-            t = t[4:].strip()
+def _role_contract_check(provider, model, role):
+    """Probe one role against its REAL agent schema. Returns a result tuple
+    (ok, response_validated, message, debug_excerpt)."""
+    from .agents import ROLE_CONTRACTS
+    from .errors import SchemaContractError
+    from .json_contracts import load_validated_object, sanitize_excerpt
+
+    contract = ROLE_CONTRACTS[role]
     try:
-        return isinstance(json.loads(t), dict)
-    except (json.JSONDecodeError, ValueError):
-        return False
+        raw = provider.complete(
+            model=model,
+            system_prompt=contract["system_prompt"],
+            user_prompt=contract["test_instruction"],
+            json_schema_instruction=f"Return a {contract['schema_name']} JSON object.",
+            timeout=PROVIDER_TEST_TIMEOUT,
+        )
+    except ProviderError as exc:
+        return False, False, f"Provider call failed: {exc}", None
+    except Exception:  # never leak internals
+        return False, False, "Provider call failed: unexpected error.", None
+
+    try:
+        load_validated_object(
+            provider,
+            model,
+            raw,
+            contract["schema"],
+            contract["schema_name"],
+            extra_check=contract["extra_check"],
+            normalize=contract["normalize"],
+        )
+        return (
+            True,
+            True,
+            f"Connected and returned a valid {role} schema contract.",
+            None,
+        )
+    except SchemaContractError as exc:
+        excerpt = getattr(exc, "raw_excerpt", None) or sanitize_excerpt(raw)
+        return (
+            False,
+            False,
+            f"Provider responded, but output did not satisfy the {role} schema contract.",
+            excerpt,
+        )
+    except Exception:
+        return (
+            False,
+            False,
+            f"Provider responded, but output did not satisfy the {role} schema contract.",
+            sanitize_excerpt(raw),
+        )
 
 
 def test_provider(provider_config, models_to_test=None) -> dict:
-    """Probe one or more agent-role models with a tiny structured-JSON call.
+    """Validate one or more agent-role models against their REAL schema contracts.
 
-    Proves connectivity + a valid structured response WITHOUT running an
-    assessment, mutating any prompt/policy, or writing audit files. The API key
-    is used only in memory and never echoed, logged, or returned.
+    Proves the provider/model can produce output that satisfies the SAME Pydantic
+    contracts the agents enforce — WITHOUT running an assessment, mutating any
+    prompt/policy, or writing audit files. Generic JSON that fails the role
+    contract is reported as a failure (not a false success). The API key is used
+    only in memory and never echoed, logged, or returned. Failures carry a short,
+    secret-redacted ``debug_excerpt``.
     """
     roles = list(models_to_test) if models_to_test else list(AGENT_ROLES)
     unknown = [r for r in roles if r not in AGENT_ROLES]
@@ -484,29 +643,7 @@ def test_provider(provider_config, models_to_test=None) -> dict:
     for role in roles:
         model = models[ROLE_MODEL_KEY[role]]
         start = time.perf_counter()
-        ok = False
-        validated = False
-        message = ""
-        try:
-            text = provider.complete(
-                model=model,
-                system_prompt=_PROBE_SYSTEM,
-                user_prompt=_PROBE_USER,
-                json_schema_instruction=_PROBE_SCHEMA,
-                timeout=PROVIDER_TEST_TIMEOUT,
-            )
-            validated = _validate_probe_response(text)
-            ok = validated
-            message = (
-                "Connected and returned a valid structured response."
-                if validated
-                else "Connected, but the model did not return valid structured JSON."
-            )
-        except ProviderError as exc:
-            # ProviderError messages are built from non-secret fields only.
-            message = f"Provider call failed: {exc}"
-        except Exception:  # never leak internals (could contain request detail)
-            message = "Provider call failed: unexpected error."
+        ok, validated, message, excerpt = _role_contract_check(provider, model, role)
         latency_ms = int((time.perf_counter() - start) * 1000)
         overall_ok = overall_ok and ok
         results.append(
@@ -518,6 +655,7 @@ def test_provider(provider_config, models_to_test=None) -> dict:
                 "latency_ms": latency_ms,
                 "response_validated": validated,
                 "message": message,
+                "debug_excerpt": excerpt,
             }
         )
 
@@ -559,6 +697,51 @@ def sanitize_audit_filename(name: Optional[str]) -> str:
     if not name.endswith(".jsonl"):
         raise ApiError(400, "Audit filename must end with .jsonl.")
     return name
+
+
+# Explicit, INTENTIONALLY STRICT allowlist of client-side routes that may
+# receive the SPA shell (index.html). The React app navigates entirely by
+# internal state (no react-router / URL routing), so the only true entry point
+# is "/"; the remaining names are friendly deep-links that simply mirror the
+# current nav section ids in apps/web/src/components/nav.ts (overview/target/
+# assessment/results/evidence/risks/provider/proof) plus their hyphenated
+# aliases. This list is deliberately NOT broadened to "any non-file path":
+# ANY other path (e.g. /etc/passwd, /pyproject.toml, /src/..., /dashboard) must
+# 404 instead of being treated as a client route — convenience never trumps
+# security. If a new nav section is added, add its id here in lockstep.
+FRONTEND_ROUTES = frozenset(
+    {
+        "",  # "/" — the SPA root
+        # Canonical friendly route names.
+        "overview",
+        "target-config",
+        "assessment",
+        "results",
+        "evidence",
+        "open-risks",
+        "provider-settings",
+        "engineering-proof",
+        # Internal nav section ids (kept in sync with apps/web/src/components/nav.ts).
+        "target",
+        "risks",
+        "provider",
+        "proof",
+    }
+)
+
+
+def is_frontend_route(requested_path: str) -> bool:
+    """True only for an allowlisted SPA client route (exact, single segment).
+
+    A leading slash is tolerated; anything containing a further slash, a dot, a
+    NUL, or a backslash is rejected outright (it is not a client route).
+    """
+    if requested_path is None:
+        return False
+    path = requested_path.lstrip("/")
+    if "\x00" in path or "\\" in path or "/" in path or "." in path:
+        return False
+    return path in FRONTEND_ROUTES
 
 
 def resolve_safe_static_path(static_root, requested_path: str) -> Optional[Path]:

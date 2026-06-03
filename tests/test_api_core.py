@@ -217,6 +217,23 @@ def test_resolve_safe_static_path_allows_nonexistent_spa_route(tmp_path):
     assert safe is not None
 
 
+@pytest.mark.parametrize(
+    "route", ["", "/", "overview", "/assessment", "open-risks", "engineering-proof"]
+)
+def test_is_frontend_route_allows_known_routes(route):
+    assert api_core.is_frontend_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["etc/passwd", "pyproject.toml", "package.json", "src/noxus/api_core.py",
+     "../pyproject.toml", "app/pyproject.toml", "favicon.ico", "dashboard"],
+)
+def test_is_frontend_route_rejects_file_like_and_unknown(path):
+    # File-looking / traversal / unknown paths are NOT client routes.
+    assert api_core.is_frontend_route(path) is False
+
+
 def test_agent_assisted_run_does_not_echo_key_on_provider_failure():
     # Unreachable endpoint -> ProviderError -> ApiError(502), key never surfaced.
     cfg = api_core.ProviderConfig(
@@ -352,8 +369,13 @@ def test_provider_test_unreachable_is_sanitized_and_keyless():
         assert isinstance(r["latency_ms"], int)
 
 
-def test_provider_test_success_validates_structured_response(monkeypatch):
-    fake = FakeLLMProvider(default='{"noxus_provider_check": true}')
+def test_provider_test_success_validates_real_role_contracts(monkeypatch):
+    # Each role returns output valid for its REAL agent schema (tag-routed).
+    fake = FakeLLMProvider(
+        red=m2_data.VALID_PROBE_BATCH,
+        judge=m2_data.VALID_JUDGMENT_VIOLATION,
+        tuning=m2_data.EMPTY_PATCHSET,
+    )
     monkeypatch.setattr(
         api_core,
         "build_provider",
@@ -365,20 +387,49 @@ def test_provider_test_success_validates_structured_response(monkeypatch):
     assert res["provider_type"] == "gemini_native"
     assert all(r["ok"] and r["response_validated"] for r in res["results"])
     assert res["results"][0]["purpose"] == "Generates adversarial probes"
+    assert all("schema contract" in r["message"] for r in res["results"])
     assert _SENTINEL_KEY not in json.dumps(res)
     assert "checked_at_utc" in res
 
 
-def test_provider_test_supports_single_role(monkeypatch):
+def test_provider_test_generic_json_fails_role_contract(monkeypatch):
+    # Valid generic JSON that does NOT satisfy the role schema -> failure, not
+    # a false "connection successful".
     fake = FakeLLMProvider(default='{"noxus_provider_check": true}')
     monkeypatch.setattr(
         api_core,
         "build_provider",
         lambda cfg: (fake, {"red_model": "r", "judge_model": "j", "tuning_model": "t"}),
     )
-    cfg = api_core.ProviderConfig(provider_type="gemini_native", api_key="k")
-    res = api_core.test_provider(cfg, ["judge"])
-    assert len(res["results"]) == 1 and res["results"][0]["role"] == "judge"
+    res = api_core.test_provider(
+        api_core.ProviderConfig(provider_type="gemini_native", api_key=_SENTINEL_KEY),
+        ["red", "judge", "tuning"],
+    )
+    assert res["ok"] is False
+    for r in res["results"]:
+        assert r["ok"] is False and r["response_validated"] is False
+        assert "did not satisfy the" in r["message"]
+        assert r["debug_excerpt"]  # sanitized snippet present
+    assert _SENTINEL_KEY not in json.dumps(res)
+
+
+@pytest.mark.parametrize("role", ["red", "judge", "tuning"])
+def test_provider_test_validates_each_role_schema(monkeypatch, role):
+    fake = FakeLLMProvider(
+        red=m2_data.VALID_PROBE_BATCH,
+        judge=m2_data.VALID_JUDGMENT_VIOLATION,
+        tuning=m2_data.EMPTY_PATCHSET,
+    )
+    monkeypatch.setattr(
+        api_core,
+        "build_provider",
+        lambda cfg: (fake, {"red_model": "r", "judge_model": "j", "tuning_model": "t"}),
+    )
+    res = api_core.test_provider(
+        api_core.ProviderConfig(provider_type="gemini_native", api_key="k"), [role]
+    )
+    assert len(res["results"]) == 1 and res["results"][0]["role"] == role
+    assert res["results"][0]["ok"] is True
 
 
 def test_provider_test_writes_no_audit_files(tmp_path, monkeypatch):
@@ -399,3 +450,84 @@ def test_provider_test_gemini_is_header_based():
         api_core.ProviderConfig(provider_type="gemini_native", api_key="k")
     )
     assert isinstance(provider, GeminiNativeProvider)
+
+
+# --------------------------------------------------------------------------- #
+# Base URL validation (clean 400 instead of urllib "unknown url type")
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("provider_type", ["openai_compatible", "local_openai_compatible"])
+def test_base_url_without_scheme_is_clean_400(provider_type):
+    cfg = api_core.ProviderConfig(
+        provider_type=provider_type, base_url="localhost:4000/v1", api_key="k"
+    )
+    with pytest.raises(api_core.ApiError) as exc:
+        api_core.build_provider(cfg)
+    assert exc.value.status_code == 400
+    assert exc.value.message == api_core.BASE_URL_SCHEME_ERROR
+    assert "unknown url type" not in exc.value.message.lower()
+
+
+def test_run_agent_assisted_invalid_base_url_is_400():
+    s = api_core.sample_inputs()
+    req = api_core.RunAssessmentRequest(
+        mode="agent_assisted",
+        system_prompt=s["system_prompt"],
+        security_policy_yaml=s["security_policy_yaml"],
+        business_context=s["business_context"],
+        provider_config=api_core.ProviderConfig(
+            provider_type="openai_compatible",
+            base_url="localhost:4000/v1",
+            api_key="k",
+            red_model="m",
+            judge_model="m",
+            tuning_model="m",
+        ),
+    )
+    with pytest.raises(api_core.ApiError) as exc:
+        api_core.run_assessment(req)
+    assert exc.value.status_code == 400
+    assert exc.value.message == api_core.BASE_URL_SCHEME_ERROR
+
+
+def test_provider_test_invalid_base_url_is_400():
+    cfg = api_core.ProviderConfig(
+        provider_type="openai_compatible", base_url="localhost:4000/v1", api_key="k"
+    )
+    with pytest.raises(api_core.ApiError) as exc:
+        api_core.test_provider(cfg, ["red"])
+    assert exc.value.status_code == 400
+    assert exc.value.message == api_core.BASE_URL_SCHEME_ERROR
+
+
+# --------------------------------------------------------------------------- #
+# Security policy schema — clean structured error (no raw Pydantic dump)
+# --------------------------------------------------------------------------- #
+def test_unsupported_policy_keys_return_structured_error():
+    bad = "bogus_top: true\nsensitive_data:\n  block: []\n  not_a_field: 1\n"
+    req = api_core.RunAssessmentRequest(mode="deterministic", security_policy_yaml=bad)
+    with pytest.raises(api_core.ApiError) as exc:
+        api_core.run_assessment(req)
+    e = exc.value
+    assert e.status_code == 400
+    assert e.code == "policy_schema"
+    assert e.message == api_core.POLICY_SCHEMA_MESSAGE
+    assert "bogus_top" in e.details["unsupported_keys"]
+    assert "sensitive_data.not_a_field" in e.details["unsupported_keys"]
+    assert set(e.details["allowed_keys"]) == {
+        "sensitive_data",
+        "prompt_injection",
+        "output_policy",
+        "human_review",
+    }
+    assert "sensitive_data" in e.details["example_yaml"]
+
+
+def test_policy_schema_error_has_no_raw_pydantic_dump():
+    bad = "bogus_top: true\n"
+    req = api_core.RunAssessmentRequest(mode="deterministic", security_policy_yaml=bad)
+    with pytest.raises(api_core.ApiError) as exc:
+        api_core.run_assessment(req)
+    blob = json.dumps([exc.value.message, exc.value.details]).lower()
+    assert "pydantic" not in blob
+    assert "extra inputs are not permitted" not in blob
+    assert "errors.pydantic.dev" not in blob

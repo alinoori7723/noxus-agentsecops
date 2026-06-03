@@ -37,6 +37,18 @@ logger = logging.getLogger("noxus.api")
 DEFAULT_DEV_CORS_ORIGINS = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
+def _http_error(exc: "api_core.ApiError") -> HTTPException:
+    """Map an ApiError to an HTTPException.
+
+    For coded errors the ``detail`` is a structured (but safe) object so the UI
+    can render a clean, friendly message; otherwise it stays a plain string.
+    """
+    if exc.code:
+        detail = {"message": exc.message, "code": exc.code, **(exc.details or {})}
+        return HTTPException(status_code=exc.status_code, detail=detail)
+    return HTTPException(status_code=exc.status_code, detail=exc.message)
+
+
 def _test_count() -> Optional[int]:
     raw = os.environ.get("NOXUS_TEST_COUNT")
     if raw and raw.isdigit():
@@ -112,7 +124,7 @@ def create_app() -> FastAPI:
         try:
             _report, response = api_core.run_assessment(req)
         except api_core.ApiError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+            raise _http_error(exc) from exc
         return response
 
     @app.post("/api/providers/test")
@@ -126,7 +138,7 @@ def create_app() -> FastAPI:
         try:
             return api_core.test_provider(req.provider_config, req.models_to_test)
         except api_core.ApiError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+            raise _http_error(exc) from exc
 
     @app.post("/api/audit/export-local")
     def export_audit(req: api_core.AuditExportRequest) -> dict:
@@ -135,7 +147,7 @@ def create_app() -> FastAPI:
         try:
             path = api_core.export_audit_local(req.report, req.filename)
         except api_core.ApiError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+            raise _http_error(exc) from exc
         return {"ok": True, "path": path}
 
     # ----------------------------------------------------------------------- #
@@ -159,14 +171,17 @@ def create_app() -> FastAPI:
             # The /api namespace is handled above; never fall back for it.
             if full_path.startswith("api/"):
                 raise HTTPException(status_code=404, detail="Not found")
+            # 1. Genuine built static files (favicon, vite.svg, etc.) inside the
+            #    verified static root are served as-is. Traversal/escapes -> None.
             safe = api_core.resolve_safe_static_path(static_dir, full_path)
-            if safe is None:
-                # Absolute path / traversal / escapes the static root.
-                raise HTTPException(status_code=404, detail="Not found")
-            if safe.is_file():
+            if safe is not None and safe.is_file():
                 return FileResponse(str(safe))
-            # Safe but not an existing file -> SPA client route -> index.html.
-            return FileResponse(str(index_file))
+            # 2. Only explicitly allowlisted client routes receive the SPA shell.
+            #    Everything else (e.g. /etc/passwd, /pyproject.toml, /src/...) 404s
+            #    instead of being treated as a safe client route.
+            if api_core.is_frontend_route(full_path):
+                return FileResponse(str(index_file))
+            raise HTTPException(status_code=404, detail="Not found")
     else:
 
         @app.get("/")

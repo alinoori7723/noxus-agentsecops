@@ -232,6 +232,12 @@ class ReportMetadata(BaseModel):
     # bounded tuning iterations ran (0 in pure deterministic mode).
     mode: str = "deterministic"
     tuning_iterations: int = 0
+    # Presentation-only telemetry for an agent-assisted schema-contract failure.
+    # These never affect scoring/readiness; they let the UI render a partial
+    # failure (which agent stage failed) with a sanitized excerpt of the output.
+    failed_stage: Optional[str] = None
+    failed_role: Optional[str] = None
+    schema_failure_excerpt: Optional[str] = None
 
 
 class ReadinessReport(BaseModel):

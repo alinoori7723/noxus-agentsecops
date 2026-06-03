@@ -1,6 +1,5 @@
 __pycache__/
 *.pyc
-.venv/
 *.egg-info/
 .pytest_cache/
 build/
@@ -11,3 +10,20 @@ tmp/
 *.log
 .env
 .env.*
+
+# Virtualenvs (including review/agent scratch venvs) — never tracked.
+.venv/
+.venv*/
+venv/
+env/
+
+# Node / frontend build artifacts.
+node_modules/
+apps/web/node_modules/
+apps/web/dist/
+
+# Local tooling / scratch artifacts.
+.claude/
+screenshots/
+*.tmp
+*.bak

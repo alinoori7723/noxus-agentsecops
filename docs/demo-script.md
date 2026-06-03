@@ -75,7 +75,7 @@ Point at the open-risk line for `proprietary_context_exposure`.
 
 ## 7. Engineering proof (≈25s)
 
-> "Under the hood: 165 passing tests, including 35 deterministic regression tests,
+> "Under the hood: 201 passing tests, including 35 deterministic regression tests,
 > plus a Vitest frontend suite. Every LLM output is validated against Pydantic
 > schemas with one bounded repair attempt — failure routes to
 > `HUMAN_REVIEW_REQUIRED`. The loop is bounded at `MAX_TUNING_ITERATIONS = 2`. An

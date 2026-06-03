@@ -4,7 +4,36 @@ import type {
   ProviderTestResponse,
   ReadinessSummary,
   RedBlueModel,
+  SchemaFailure,
 } from "../types/noxus";
+
+// Agent-assisted run where the Red Team Agent failed schema validation but the
+// deterministic baseline was preserved.
+export const agentTracePartialFailure: AgentTrace = {
+  execution_mode: "agent_assisted",
+  provider_type: "gemini_native",
+  red_model: "gemini-3.5-flash",
+  judge_model: "gemini-3.5-flash",
+  tuning_model: "gemini-3.1-pro-preview",
+  semantic_judgment_source: "deterministic",
+  patch_proposal_source: "llm",
+  stages: [
+    { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Generated structured probes — failed schema validation." },
+    { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "not_used", summary: "Not reached — an earlier agent stage failed." },
+    { stage: "policy_tuning", role: "tuning", model: "gemini-3.1-pro-preview", provider_type: "gemini_native", source: "llm", status: "not_used", summary: "Not reached — an earlier agent stage failed." },
+    { stage: "patch_application", role: null, model: null, provider_type: null, source: "deterministic_engine", status: "not_used", summary: "Deterministic engine applied 0 allowed patch operations." },
+  ],
+};
+
+export const schemaFailure: SchemaFailure = {
+  failed_stage: "red_team_generation",
+  failed_role: "red",
+  debug_excerpt: "{ probes: [ ... not valid JSON ... ]",
+  baseline_preserved: true,
+  baseline_probe_count: 5,
+  baseline_finding_count: 6,
+  reason: "schema contract failure",
+};
 
 export const deterministicTrace: AgentTrace = {
   execution_mode: "deterministic",
@@ -107,9 +136,9 @@ export const providerTestSuccess: ProviderTestResponse = {
   provider_type: "gemini_native",
   checked_at_utc: "2026-06-01T12:00:00+00:00",
   results: [
-    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: true, latency_ms: 142, response_validated: true, message: "Connected and returned a valid structured response." },
-    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: true, latency_ms: 138, response_validated: true, message: "Connected and returned a valid structured response." },
-    { role: "tuning", purpose: "Proposes schema-bound patches", model: "gemini-3.1-pro-preview", ok: true, latency_ms: 210, response_validated: true, message: "Connected and returned a valid structured response." },
+    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: true, latency_ms: 142, response_validated: true, message: "Connected and returned a valid red schema contract.", debug_excerpt: null },
+    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: true, latency_ms: 138, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null },
+    { role: "tuning", purpose: "Proposes schema-bound patches", model: "gemini-3.1-pro-preview", ok: true, latency_ms: 210, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null },
   ],
 };
 
@@ -118,7 +147,7 @@ export const providerTestFailure: ProviderTestResponse = {
   provider_type: "openai_compatible",
   checked_at_utc: "2026-06-01T12:00:00+00:00",
   results: [
-    { role: "red", purpose: "Generates adversarial probes", model: "m1", ok: false, latency_ms: 24, response_validated: false, message: "Provider call failed: Network error contacting LLM endpoint." },
+    { role: "red", purpose: "Generates adversarial probes", model: "m1", ok: false, latency_ms: 24, response_validated: false, message: "Provider responded, but output did not satisfy the red schema contract.", debug_excerpt: "{\"noxus_provider_check\": true}" },
   ],
 };
 

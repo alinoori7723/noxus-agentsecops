@@ -22,6 +22,7 @@ interface AssessmentPanelProps {
   error: string | null;
   providerTestOk: boolean;
   providerTestStale: boolean;
+  providerConfigError: string | null;
 }
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -80,9 +81,11 @@ export function AssessmentPanel({
   error,
   providerTestOk,
   providerTestStale,
+  providerConfigError,
 }: AssessmentPanelProps) {
   const isAgent = mode === "agent_assisted";
   const keyMissing = isAgent && !provider.api_key;
+  const configInvalid = isAgent && Boolean(providerConfigError);
   const tested = providerTestOk && !providerTestStale;
 
   return (
@@ -155,7 +158,15 @@ export function AssessmentPanel({
               </span>
             )}
           </div>
-          {!keyMissing && (
+          {!keyMissing && configInvalid && (
+            <div className="mt-2 border-t border-current/10 pt-2">
+              <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-rose-700">
+                <AlertTriangle size={14} /> {providerConfigError}{" "}
+                Fix it under Provider Settings.
+              </span>
+            </div>
+          )}
+          {!keyMissing && !configInvalid && (
             <div className="mt-2 border-t border-current/10 pt-2">
               {tested ? (
                 <span className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-emerald-700">
@@ -189,7 +200,7 @@ export function AssessmentPanel({
       <button
         type="button"
         onClick={onRun}
-        disabled={running || keyMissing}
+        disabled={running || keyMissing || configInvalid}
         className="btn-primary w-full py-3 text-[15px]"
       >
         {running ? (

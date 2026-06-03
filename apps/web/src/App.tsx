@@ -5,7 +5,11 @@ import { NAV_ITEMS, type SectionId } from "./components/nav";
 import { Overview } from "./components/Overview";
 import { InputWorkspace, type TargetInputs } from "./components/InputWorkspace";
 import { AssessmentPanel } from "./components/AssessmentPanel";
-import { ProviderSettings, type ProviderTestState } from "./components/ProviderSettings";
+import {
+  ProviderSettings,
+  type ProviderTestState,
+  baseUrlError,
+} from "./components/ProviderSettings";
 import { EmptyState } from "./components/EmptyState";
 import { ReadinessSummary } from "./components/ReadinessSummary";
 import { RoleObservability } from "./components/RoleObservability";
@@ -14,6 +18,8 @@ import { RedBlueDashboard } from "./components/RedBlueDashboard";
 import { EvidenceReport } from "./components/EvidenceReport";
 import { OpenRisks } from "./components/OpenRisks";
 import { EngineeringSafeguards } from "./components/EngineeringSafeguards";
+import { PolicyError } from "./components/PolicyError";
+import { PartialRunBanner } from "./components/PartialRunBanner";
 import {
   getHealth,
   getProof,
@@ -26,9 +32,20 @@ import type {
   AgentRole,
   AssessmentResponse,
   Mode,
+  PolicyErrorDetail,
   ProofIndicators,
   ProviderConfig,
 } from "./types/noxus";
+
+function isPolicySchemaError(data: unknown): data is PolicyErrorDetail {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "code" in data &&
+    ((data as { code?: string }).code === "policy_schema" ||
+      (data as { code?: string }).code === "policy_yaml")
+  );
+}
 
 function providerSignature(p: ProviderConfig): string {
   return JSON.stringify([
@@ -70,6 +87,7 @@ export default function App() {
 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [policyError, setPolicyError] = useState<PolicyErrorDetail | null>(null);
   const [result, setResult] = useState<AssessmentResponse | null>(null);
 
   const [providerTest, setProviderTest] = useState<{
@@ -81,6 +99,16 @@ export default function App() {
 
   const onTestProvider = useCallback(
     async (roles: AgentRole[]) => {
+      const urlErr = baseUrlError(provider);
+      if (urlErr) {
+        setProviderTest({
+          status: "done",
+          response: null,
+          error: urlErr,
+          testedSignature: null,
+        });
+        return;
+      }
       setProviderTest((s) => ({ ...s, status: "testing", error: null }));
       try {
         const response = await testProvider(provider, roles);
@@ -140,8 +168,19 @@ export default function App() {
 
   const run = useCallback(
     async (runMode: Mode) => {
+      // Client-side guard: never send an invalid base URL to the backend.
+      if (runMode === "agent_assisted") {
+        const urlErr = baseUrlError(provider);
+        if (urlErr) {
+          setPolicyError(null);
+          setError(urlErr);
+          setSection("provider");
+          return;
+        }
+      }
       setRunning(true);
       setError(null);
+      setPolicyError(null);
       try {
         const req = {
           mode: runMode,
@@ -154,11 +193,16 @@ export default function App() {
         setResult(res);
         setSection("results");
       } catch (e) {
-        const msg =
-          e instanceof ApiError
-            ? e.message
-            : "The assessment could not be completed. Please try again.";
-        setError(msg);
+        if (e instanceof ApiError && isPolicySchemaError(e.data)) {
+          setPolicyError(e.data as PolicyErrorDetail);
+          setSection("target");
+        } else {
+          const msg =
+            e instanceof ApiError
+              ? e.message
+              : "The assessment could not be completed. Please try again.";
+          setError(msg);
+        }
       } finally {
         setRunning(false);
       }
@@ -171,6 +215,14 @@ export default function App() {
       setInputs((prev) => ({ ...prev, [key]: sampleInputs[key] })),
     [sampleInputs],
   );
+
+  const resetPolicyToSample = useCallback(() => {
+    setInputs((prev) => ({
+      ...prev,
+      security_policy_yaml: sampleInputs.security_policy_yaml,
+    }));
+    setPolicyError(null);
+  }, [sampleInputs]);
 
   const navItem = NAV_ITEMS.find((n) => n.id === section)!;
 
@@ -197,14 +249,22 @@ export default function App() {
           )}
 
           {section === "target" && (
-            <InputWorkspace
-              value={inputs}
-              onChange={setInputs}
-              onLoadSamples={loadSamples}
-              onResetTab={resetTab}
-              samplesLoading={samplesLoading}
-              loadedFromSample={loadedFromSample}
-            />
+            <div className="space-y-4">
+              {policyError && (
+                <PolicyError
+                  detail={policyError}
+                  onResetPolicy={resetPolicyToSample}
+                />
+              )}
+              <InputWorkspace
+                value={inputs}
+                onChange={setInputs}
+                onLoadSamples={loadSamples}
+                onResetTab={resetTab}
+                samplesLoading={samplesLoading}
+                loadedFromSample={loadedFromSample}
+              />
+            </div>
           )}
 
           {section === "assessment" && (
@@ -218,6 +278,7 @@ export default function App() {
               error={error}
               providerTestOk={providerTestOk}
               providerTestStale={providerStale}
+              providerConfigError={baseUrlError(provider)}
             />
           )}
 
@@ -238,6 +299,9 @@ export default function App() {
           {section === "results" &&
             (result ? (
               <div className="space-y-6">
+                {result.schema_failure && (
+                  <PartialRunBanner failure={result.schema_failure} />
+                )}
                 <ReadinessSummary model={result.readiness} />
                 <RoleObservability
                   trace={result.agent_trace}

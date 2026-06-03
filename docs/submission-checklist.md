@@ -16,12 +16,12 @@ git tag --list
 
 ## Tests
 
-- [ ] Full suite green (expected: **165 passed** with dev extras installed).
-- [ ] Frontend tests green (15 Vitest tests).
+- [ ] Full suite green (expected: **201 passed** with dev extras installed).
+- [ ] Frontend tests green (27 Vitest tests).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # 165 passed (httpx from dev extras)
+.venv/bin/pytest -q          # 201 passed (httpx from dev extras)
 cd apps/web && npm ci && npm run test && cd -
 ```
 

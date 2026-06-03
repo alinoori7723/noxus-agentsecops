@@ -8,11 +8,33 @@ the minimal, targeted edits described by a PatchSet.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 from .constants import SAFETY_RAIL_HEADING
+from .errors import SchemaContractError
 from .policy_loader import validate_policy
 from .schemas import PatchOp, PatchSet
+
+# Defense-in-depth: even if an unsafe path slips past the agent-layer allowlist,
+# the engine itself refuses to write a structurally-unsafe policy path. This is a
+# pure structural guard (no allowlist) — the agents layer owns the allowlist.
+_SAFE_SEGMENT_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+
+def _assert_safe_policy_path(path: str) -> None:
+    """Raise SchemaContractError for any traversal/file-looking policy path."""
+    if (
+        not isinstance(path, str)
+        or not path
+        or ".." in path
+        or path.startswith("/")
+        or "\\" in path
+        or "\x00" in path
+        or ":" in path
+        or not all(_SAFE_SEGMENT_RE.match(seg) for seg in path.split("."))
+    ):
+        raise SchemaContractError(f"Patch engine refused an unsafe policy path: {path!r}.")
 
 
 def _apply_safety_rail(
@@ -54,6 +76,7 @@ def _apply_safety_rail(
 
 def _set_by_path(policy: dict[str, Any], path: str, value: Any) -> None:
     """Set a dotted path in the policy dict, only on existing structure."""
+    _assert_safe_policy_path(path)
     keys = path.split(".")
     node = policy
     for key in keys[:-1]:
@@ -65,6 +88,7 @@ def _set_by_path(policy: dict[str, Any], path: str, value: Any) -> None:
 
 def _ensure_list_member(policy: dict[str, Any], path: str, member: str) -> None:
     """Append member to a list at the dotted path if not already present."""
+    _assert_safe_policy_path(path)
     keys = path.split(".")
     node = policy
     for key in keys[:-1]:
@@ -122,6 +146,16 @@ def apply_patch_set(
                 _set_by_path(new_policy, op.path, op.value)
         # No silent failure: any unknown operation would raise on enum creation.
 
-    # Schema-validate the patched policy and normalize back to a plain dict.
-    validated = validate_policy(new_policy)
+    # Schema-validate the patched policy and normalize back to a plain dict. If
+    # an LLM-proposed patch produced a policy that violates the schema (e.g. an
+    # arbitrary key created via a bad path), convert that into a SchemaContractError
+    # so the orchestrator can fail safely to HUMAN_REVIEW_REQUIRED instead of
+    # surfacing a raw Pydantic ValidationError. (Deterministic patches always
+    # validate, so this never changes deterministic behavior.)
+    try:
+        validated = validate_policy(new_policy)
+    except Exception as exc:  # pydantic ValidationError / policy ValueError
+        raise SchemaContractError(
+            f"Patched policy failed schema validation: {exc}"
+        ) from exc
     return new_prompt, validated.model_dump()

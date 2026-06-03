@@ -14,22 +14,33 @@ import type {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  // Structured, safe error detail (e.g. policy-schema errors). Never a key.
+  data: unknown;
+  constructor(status: number, message: string, data?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.data = data;
   }
 }
 
 async function parseError(res: Response): Promise<never> {
   let message = `Request failed (${res.status})`;
+  let data: unknown;
   try {
     const body = await res.json();
-    if (body && typeof body.detail === "string") message = body.detail;
+    const detail = body?.detail;
+    if (typeof detail === "string") {
+      message = detail;
+    } else if (detail && typeof detail === "object") {
+      // Structured (coded) error — never contains an API key.
+      data = detail;
+      if (typeof detail.message === "string") message = detail.message;
+    }
   } catch {
     // non-JSON error body; keep the generic message
   }
-  throw new ApiError(res.status, message);
+  throw new ApiError(res.status, message, data);
 }
 
 export async function getHealth(): Promise<HealthPayload> {

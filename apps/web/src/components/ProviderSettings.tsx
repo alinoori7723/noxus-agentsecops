@@ -73,6 +73,24 @@ export interface ProviderTestState {
   stale: boolean;
 }
 
+export const BASE_URL_SCHEME_ERROR = "Base URL must include http:// or https://";
+
+/**
+ * Returns a validation error string for the provider's base URL, or null when
+ * valid. Gemini native needs no base URL. Local mode may be left blank (a
+ * default is used); a non-blank value must carry an http(s) scheme.
+ */
+export function baseUrlError(p: ProviderConfig): string | null {
+  if (p.provider_type === "gemini_native") return null;
+  const url = (p.base_url ?? "").trim();
+  if (p.provider_type === "openai_compatible" && !url) {
+    return "Base URL is required for an OpenAI-compatible provider.";
+  }
+  if (!url) return null; // local mode: blank -> server default
+  if (!/^https?:\/\//i.test(url)) return BASE_URL_SCHEME_ERROR;
+  return null;
+}
+
 interface ProviderSettingsProps {
   provider: ProviderConfig;
   onChange: (next: ProviderConfig) => void;
@@ -153,13 +171,23 @@ function Diagnostics({ testState }: { testState: ProviderTestState }) {
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1">
                 <StatusChip
-                  label={r.response_validated ? "valid JSON" : "no valid JSON"}
-                  color={r.response_validated ? "green" : "amber"}
+                  label={r.ok ? "schema contract ok" : "schema contract failed"}
+                  color={r.ok ? "green" : "red"}
                 />
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
                 {r.message}
               </p>
+              {r.debug_excerpt && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer text-[11px] font-semibold text-slate-500 hover:text-slate-700">
+                    output excerpt
+                  </summary>
+                  <pre className="code-block scroll-thin mt-1.5 max-h-32 bg-white text-[10.5px]">
+                    {r.debug_excerpt}
+                  </pre>
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -178,7 +206,9 @@ export function ProviderSettings({
   const pt = provider.provider_type;
   const showBaseUrl = pt !== "gemini_native";
   const set = (patch: Partial<ProviderConfig>) => onChange({ ...provider, ...patch });
-  const canTest = Boolean(provider.api_key) && testState.status !== "testing";
+  const urlError = baseUrlError(provider);
+  const canTest =
+    Boolean(provider.api_key) && !urlError && testState.status !== "testing";
 
   return (
     <div className="space-y-4">
@@ -218,7 +248,12 @@ export function ProviderSettings({
             <Field label="Base URL">
               <input
                 type="text"
-                className="field font-mono text-xs"
+                inputMode="url"
+                aria-invalid={urlError ? true : undefined}
+                className={clsx(
+                  "field font-mono text-xs",
+                  urlError && "border-rose-400 focus:border-rose-400 focus:ring-rose-100",
+                )}
                 placeholder={
                   pt === "local_openai_compatible"
                     ? "http://localhost:4000/v1"
@@ -227,6 +262,17 @@ export function ProviderSettings({
                 value={provider.base_url ?? ""}
                 onChange={(e) => set({ base_url: e.target.value })}
               />
+              {urlError ? (
+                <span className="mt-1.5 block text-[11.5px] font-medium text-rose-600">
+                  {urlError}
+                </span>
+              ) : (
+                <span className="mt-1.5 block text-[11px] leading-relaxed text-slate-400">
+                  Local (non-Docker):{" "}
+                  <code className="font-mono">http://localhost:4000/v1</code> · Docker:{" "}
+                  <code className="font-mono">http://host.docker.internal:4000/v1</code>
+                </span>
+              )}
             </Field>
           )}
           <Field label="API key">
