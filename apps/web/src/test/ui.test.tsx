@@ -527,3 +527,49 @@ describe("Evidence basis (degraded/fallback clarity)", () => {
     ).toBeInTheDocument();
   });
 });
+
+import { redBlueZeroAfterScore } from "./fixtures";
+
+describe("RedBlueDashboard remediation honesty (resolved vs unresolved)", () => {
+  it("patch_operations_show_source_finding_ids", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(
+      screen.getByText(/probe_indirect_prompt_injection:indirect_prompt_injection_simulated/),
+    ).toBeInTheDocument();
+  });
+
+  it("no_source_finding_not_specified_text", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.queryByText(/not specified/i)).not.toBeInTheDocument();
+  });
+
+  it("ui_shows_resolved_and_unresolved_counts", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.getByText(/resolved findings: 5/i)).toBeInTheDocument();
+    expect(screen.getByText(/unresolved findings: 1/i)).toBeInTheDocument();
+  });
+
+  it("ui_explains_zero_after_score_when_patches_applied", () => {
+    render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
+    expect(
+      screen.getByText(/Patches were applied, but blocking findings remained in retest/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/refused to mark this target safe/i)).toBeInTheDocument();
+    // Rejected/unlinked proposal is shown and labeled as not applied.
+    expect(screen.getByText(/Rejected \/ unlinked proposals/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/rejected · unlinked/i).length).toBeGreaterThan(0);
+  });
+
+  it("human_review_categories_render_from_unresolved_findings", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.getByText("proprietary_context")).toBeInTheDocument();
+  });
+
+  it("no_fake_pass_when_unresolved_findings_remain", () => {
+    render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
+    // Unresolved risk is surfaced; no green "resolved" success for the applied patch.
+    expect(screen.getByText(/unresolved findings: 9/i)).toBeInTheDocument();
+    expect(screen.getByText(/applied · risk unresolved/i)).toBeInTheDocument();
+    expect(screen.queryByText(/applied · resolved/i)).not.toBeInTheDocument();
+  });
+});

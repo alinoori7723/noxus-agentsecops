@@ -8,7 +8,7 @@ from noxus.schemas import ProbeType
 SAMPLES = Path(__file__).resolve().parents[1] / "src" / "noxus" / "samples"
 SYSTEM_PROMPT = str(SAMPLES / "system_prompt.txt")
 POLICY = str(SAMPLES / "security_policy.yaml")
-BUSINESS_CONTEXT = str(SAMPLES / "business_context.md")
+BUSINESS_CONTEXT = str(SAMPLES / "support_case_base.md")
 
 
 def _report():

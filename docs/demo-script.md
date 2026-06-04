@@ -5,6 +5,9 @@ honest framing: this is **pre-production readiness testing, not a runtime
 firewall**, and the demo intentionally starts by failing and ends at
 `CONDITIONAL_PASS` with a visible open risk.
 
+> Positioning (say it plainly): Noxus is a bounded agentic audit and remediation-readiness loop. It proposes schema-bound remediations, applies only deterministic allowed patches, measures which findings were resolved, and refuses to mark the target safe when unsupported risks remain.
+> It does **not** fully autonomously remediate or automatically secure the target — unresolved risks stay open for human review.
+
 ---
 
 ## 1. Opening (≈15s)
@@ -75,7 +78,7 @@ Point at the open-risk line for `proprietary_context_exposure`.
 
 ## 7. Engineering proof (≈25s)
 
-> "Under the hood: release verification of 354 Python tests (plus 36 frontend tests), including 35 deterministic regression tests,
+> "Under the hood: release verification of 405 Python tests (plus 42 frontend tests), including 35 deterministic regression tests,
 > plus a Vitest frontend suite. Every LLM output is validated against Pydantic
 > schemas with one bounded repair attempt — failure routes to
 > `HUMAN_REVIEW_REQUIRED`. The loop is bounded at `MAX_TUNING_ITERATIONS = 2`. An

@@ -73,3 +73,54 @@ def test_docs_test_count_matches_declared_count():
         text = path.read_text(encoding="utf-8")
         for s in stale:
             assert s not in text, f"{path.name} has a stale test-count claim: {s!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Product positioning: bounded audit/remediation-readiness, not full autonomy
+# --------------------------------------------------------------------------- #
+POSITIONING = DOCS_DIR / "positioning.md"
+DEMO = DOCS_DIR / "demo-script.md"
+CHALLENGE = DOCS_DIR / "challenge-application-draft.md"
+CHECKLIST = DOCS_DIR / "submission-checklist.md"
+OVERVIEW = PROJECT_ROOT / "apps" / "web" / "src" / "components" / "Overview.tsx"
+
+# Customer-facing surfaces. positioning.md is the INTERNAL guardrail doc whose
+# job is to enumerate avoided phrases, so it is excluded from the claim scan.
+_CUSTOMER_FACING = [README, DEMO, CHALLENGE, CHECKLIST, OVERVIEW]
+_FORBIDDEN_CLAIMS = (
+    "fully autonomous remediation",
+    "fully autonomously remediate",
+    "automatically secure",
+    "production-ready security gateway",
+    "guaranteed safe",
+    "certifies compliance",
+    "runtime firewall",
+)
+_NEGATIONS = ("not", "n't", "never", "no ", "without", "refuse")
+
+
+def test_docs_do_not_claim_full_autonomous_remediation():
+    for path in _CUSTOMER_FACING:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            low = raw.lower()
+            for claim in _FORBIDDEN_CLAIMS:
+                if claim in low:
+                    assert any(neg in low for neg in _NEGATIONS), (
+                        f"{path.name} makes a forbidden positive claim "
+                        f"{claim!r}: {raw.strip()!r}"
+                    )
+
+
+def test_docs_use_bounded_audit_remediation_readiness_wording():
+    phrase = "bounded agentic audit and remediation-readiness loop"
+    for path in (README, POSITIONING, DEMO, CHALLENGE):
+        assert phrase in path.read_text(encoding="utf-8").lower(), (
+            f"{path.name} must use the bounded audit/remediation-readiness wording"
+        )
+
+
+def test_docs_preserve_no_runtime_firewall_claim():
+    for path in (README, POSITIONING, OVERVIEW):
+        assert "not a runtime firewall" in path.read_text(encoding="utf-8").lower(), (
+            f"{path.name} must preserve the 'not a runtime firewall' disclaimer"
+        )

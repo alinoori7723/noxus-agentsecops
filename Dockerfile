@@ -28,7 +28,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     NOXUS_API_PORT=8787 \
     NOXUS_WEB_DIST=/app/web_static \
-    NOXUS_TEST_COUNT=354
+    NOXUS_TEST_COUNT=405
 
 # Non-root runtime user.
 RUN useradd --create-home --uid 1000 noxus_user

@@ -50,8 +50,10 @@ export function Overview({ onConfigure, onRunDemo, running }: OverviewProps) {
         <p className="mt-2 flex items-start gap-2 text-sm leading-relaxed text-slate-500">
           <ShieldAlert size={16} className="mt-0.5 shrink-0 text-amber-500" />
           <span>
-            Not a runtime firewall. Not a certification engine. A bounded
-            readiness loop before production.
+            Not a runtime firewall. Not a certification engine. Not full
+            autonomous remediation. A bounded agentic audit and
+            remediation-readiness loop: it applies only deterministic allowed
+            patches and refuses to mark the target safe when risks remain.
           </span>
         </p>
 

@@ -556,6 +556,8 @@ class PolicyTuningAgent:
         finding_payload = json.dumps(
             [
                 {
+                    "finding_id": f"{f.probe_id}:{f.finding_type}",
+                    "probe_id": f.probe_id,
                     "finding_type": f.finding_type,
                     "severity": f.severity.value,
                     "probe_type": f.probe_type.value,
@@ -572,8 +574,12 @@ class PolicyTuningAgent:
             "Propose a minimal PatchSet of allowed operations using EXACTLY the "
             "field names above (operation, target, and the per-operation fields). "
             "Do not invent field names like 'op', 'control', 'level', or "
-            "'data_type'. Do not apply anything; the deterministic patch engine "
-            "will apply your proposal. Do not wrap the JSON in markdown fences."
+            "'data_type'. Cite the findings each operation addresses by adding "
+            "\"source_finding_ids\": [\"<finding_id>\"] and \"source_probe_ids\": "
+            "[\"<probe_id>\"] from the findings list above; an operation that "
+            "addresses no listed finding will be rejected. Do not apply anything; "
+            "the deterministic patch engine will apply your proposal. Do not wrap "
+            "the JSON in markdown fences."
         )
 
     def propose_patches(

@@ -7,7 +7,7 @@ from noxus.cli import main
 SAMPLES = Path(__file__).resolve().parents[1] / "src" / "noxus" / "samples"
 SP = str(SAMPLES / "system_prompt.txt")
 POL = str(SAMPLES / "security_policy.yaml")
-BC = str(SAMPLES / "business_context.md")
+BC = str(SAMPLES / "support_case_base.md")
 
 
 def _run_args(extra):

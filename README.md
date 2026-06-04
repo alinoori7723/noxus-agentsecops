@@ -8,15 +8,22 @@ schema-bound agent layer (Red Team → Semantic Judge → Policy Tuning) adds
 LLM-driven probing and tuning while a deterministic engine remains the only thing
 that ever applies a patch.
 
+**Positioning:** Noxus is a bounded agentic audit and remediation-readiness loop.
+It proposes schema-bound remediations, applies only deterministic allowed patches,
+measures which findings were resolved, and refuses to mark the target safe when
+unsupported risks remain.
+
 It is **not** a runtime firewall, a DLP replacement, a compliance certification
 engine, a production traffic gateway, or a replacement for Google security
-products. It is a repeatable way to validate and tune prompt/policy security
-*before* production, with honest results.
+products. It does not fully autonomously remediate or automatically secure the
+target — the deterministic engine applies only allowed, lineage-linked patches,
+and unresolved risks stay open for human review. It is a repeatable way to
+validate and tune prompt/policy security *before* production, with honest results.
 
 All engineering milestones are complete and accepted (deterministic skeleton →
 agent layer → demo UI → container packaging), and the UI has been rebuilt as a
 production-grade **React/Tailwind cockpit** served by a minimal **FastAPI**
-backend. Release verification: **354 Python tests** (plus **36 frontend tests**).
+backend. Release verification: **405 Python tests** (plus **42 frontend tests**).
 
 | Layer                    | Status       |
 | ------------------------ | ------------ |
@@ -101,9 +108,9 @@ export NOXUS_TUNING_MODEL="gemini-3.1-pro-preview"
 
 ### Evidence-driven engineering summary
 
-- Release verification: **354 Python tests** (Python core + API; run via
+- Release verification: **405 Python tests** (Python core + API; run via
   `pip install -e ".[dev]"` then `pytest -q`), including **35 Milestone 1
-  deterministic/regression tests**, plus **36 frontend tests**.
+  deterministic/regression tests**, plus **42 frontend tests**.
 - **Schema-bound Pydantic v2 contracts** for every LLM output (one bounded repair
   attempt; on failure → `SchemaContractError` → `HUMAN_REVIEW_REQUIRED`).
 - **AST/static scope guard** that blocks forbidden cloud/provider imports and keeps
@@ -178,7 +185,7 @@ needs for the HTTP-level API tests. Without the extras those tests are skipped:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"   # pytest + httpx (test-only)
-.venv/bin/pytest -q                 # full suite: release-verified at 354 Python tests
+.venv/bin/pytest -q                 # full suite: release-verified at 405 Python tests
 ```
 
 `httpx` is a **test-only** dependency (not a runtime dependency). Running
@@ -313,7 +320,7 @@ models are reused by the API so honest-labeling rules live in exactly one place.
 ```bash
 # 1) Backend API (no AI credentials needed for deterministic mode)
 pip install -e .
-NOXUS_TEST_COUNT=354 uvicorn noxus.api_server:app --reload --port 8787
+NOXUS_TEST_COUNT=405 uvicorn noxus.api_server:app --reload --port 8787
 
 # 2) Frontend dev server (proxies /api to the backend)
 cd apps/web
@@ -325,7 +332,7 @@ For a production-style single-origin run, build the SPA and let FastAPI serve it
 
 ```bash
 cd apps/web && npm run build && cd -
-NOXUS_WEB_DIST=apps/web/dist NOXUS_TEST_COUNT=354 \
+NOXUS_WEB_DIST=apps/web/dist NOXUS_TEST_COUNT=405 \
   uvicorn noxus.api_server:app --port 8787
 # open http://localhost:8787
 ```

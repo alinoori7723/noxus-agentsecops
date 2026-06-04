@@ -30,6 +30,7 @@ from .llm_provider import LLMProvider
 from .patch_engine import apply_patch_set
 from .patch_mapper import generate_patches_from_findings
 from .policy_loader import validate_policy
+from .remediation import attach_patch_lineage
 from .probe_registry import get_probes
 from .report import build_report, score_from_results
 from .schemas import (
@@ -104,6 +105,10 @@ def _run_deterministic(
     before_findings = [f for r in before_results for f in r.findings]
 
     patch_set = generate_patches_from_findings(before_findings)
+    # Attach evidence lineage; only lineage-linked patches are applied (the
+    # deterministic mapper only emits finding-anchored patches, so all link).
+    linked, unlinked = attach_patch_lineage(patch_set.operations, before_findings)
+    patch_set = PatchSet(operations=linked)
     patched_prompt, patched_policy_dict = apply_patch_set(
         system_prompt, sp.model_dump(), patch_set
     )
@@ -122,6 +127,15 @@ def _run_deterministic(
     # UI can render an honest safety-rail preview (no scoring/state impact).
     report.after_system_prompt = patched_prompt
     report.metadata.evidence_basis = "deterministic_baseline"
+    _stamp_remediation_effectiveness(
+        report,
+        original_prompt=system_prompt,
+        current_prompt=patched_prompt,
+        original_policy=sp,
+        current_policy=patched_policy,
+        applied_ops=list(patch_set.operations),
+        rejected_ops=unlinked,
+    )
     return report
 
 
@@ -186,6 +200,32 @@ _STAGE_ROLE = {
     "policy_tuning": "tuning",
     "patch_application": "tuning",
 }
+
+
+def _stamp_remediation_effectiveness(
+    report: ReadinessReport,
+    *,
+    original_prompt: str,
+    current_prompt: str,
+    original_policy: SecurityPolicy,
+    current_policy: SecurityPolicy,
+    applied_ops: list,
+    rejected_ops: list,
+) -> None:
+    """Stamp remediation-effectiveness telemetry + rejected-proposal lineage.
+
+    Verifies the retest target actually differs from the original (the loop
+    always retests against ``current_*``), and records unlinked proposals as
+    rejected — never applied, never counted as remediation. Presentation/audit
+    only; no scoring/readiness impact.
+    """
+    report.metadata.patched_system_prompt_effective = current_prompt != original_prompt
+    report.metadata.patched_policy_effective = (
+        current_policy.model_dump() != original_policy.model_dump()
+    )
+    report.metadata.patch_application_count = len(applied_ops)
+    report.metadata.rejected_proposal_count = len(rejected_ops)
+    report.rejected_patch_operations = list(rejected_ops)
 
 
 def _stamp_red_fallback(metadata: ReportMetadata, ctx: Optional[dict]) -> None:
@@ -404,6 +444,7 @@ def _run_agent_assisted(
         before_results = results
 
         applied_ops = []
+        rejected_ops = []
         iterations_done = 0
         # 5-7 / 12. Policy tuning bounded by MAX_TUNING_ITERATIONS. In fallback
         # mode this proposes patches from the deterministic baseline findings.
@@ -414,14 +455,20 @@ def _run_agent_assisted(
             # 8-9. Propose + validate PatchSet (agent never applies patches).
             stage = "policy_tuning"
             patch_set = tuner.propose_patches(findings, current_policy, current_prompt)
-            # 10. Deterministic patch engine is the ONLY applier.
+            # 8b. Evidence lineage: bind each proposed op to the finding(s) it
+            # addresses. Ops with no safe lineage are NOT applied — they are
+            # recorded as rejected/unlinked proposals (never counted as
+            # remediation), so the LLM cannot smuggle an unmotivated edit.
+            linked, unlinked = attach_patch_lineage(patch_set.operations, findings)
+            rejected_ops.extend(unlinked)
+            # 10. Deterministic patch engine is the ONLY applier; only linked ops.
             stage = "patch_application"
             new_prompt, new_policy_dict = apply_patch_set(
-                current_prompt, current_policy.model_dump(), patch_set
+                current_prompt, current_policy.model_dump(), PatchSet(operations=linked)
             )
             current_prompt = new_prompt
             current_policy = validate_policy(new_policy_dict)
-            applied_ops.extend(patch_set.operations)
+            applied_ops.extend(linked)
             iterations_done += 1
             # 11. Rerun probes (+ semantic supplement, unless skipped/degraded).
             results = evaluator.evaluate(probes, current_prompt, current_policy)
@@ -441,6 +488,15 @@ def _run_agent_assisted(
         _stamp_red_fallback(report.metadata, report_ctx)
         # Presentation telemetry only: the REAL patched prompt after the loop.
         report.after_system_prompt = current_prompt
+        _stamp_remediation_effectiveness(
+            report,
+            original_prompt=system_prompt,
+            current_prompt=current_prompt,
+            original_policy=sp,
+            current_policy=current_policy,
+            applied_ops=applied_ops,
+            rejected_ops=rejected_ops,
+        )
         return _stamp(report)
 
     except (SchemaContractError, ValidationError) as exc:

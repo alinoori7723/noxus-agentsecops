@@ -9,14 +9,22 @@ Noxus AgentSecOps
 
 ## Tagline
 
-Autonomous red-team and policy tuning for enterprise AI apps.
+Bounded agentic audit and remediation-readiness loop for enterprise AI apps.
+
+## Canonical positioning (use verbatim)
+
+Noxus is a bounded agentic audit and remediation-readiness loop. It proposes
+schema-bound remediations, applies only deterministic allowed patches, measures
+which findings were resolved, and refuses to mark the target safe when
+unsupported risks remain.
 
 ## What it is
 
 - A **pre-production AI security readiness tester** for LLM apps.
-- An **autonomous red-team and policy-tuning loop** (generate probes → evaluate →
-  propose patches → apply deterministically → retest), bounded by
-  `MAX_TUNING_ITERATIONS = 2`.
+- A **bounded agentic audit and remediation-readiness loop** (generate probes →
+  evaluate → propose schema-bound patches → apply only deterministic allowed
+  patches → retest → measure resolved vs unresolved), bounded by
+  `MAX_TUNING_ITERATIONS = 2`. It does **not** fully autonomously remediate.
 - A **structured readiness tester** for system prompts and security policies.
 - An **evidence-backed report generator** for security/product review.
 - A **bounded agentic workflow with deterministic safety rails** — the LLM

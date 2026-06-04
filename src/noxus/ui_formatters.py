@@ -14,6 +14,7 @@ Honest-labeling rules are enforced here, not in the view layer:
 
 from __future__ import annotations
 
+from . import remediation
 from .constants import SAFETY_RAIL_HEADING
 from .schemas import (
     DetectionMode,
@@ -168,23 +169,49 @@ def format_probe_row(probe_result) -> dict:
     }
 
 
-def format_patch_row(patch_operation) -> dict:
-    """Flatten a PatchOperation into a display row."""
+def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
+    """Flatten a PatchOperation into a display row with evidence lineage + status.
+
+    ``source_label`` is NEVER empty for an applied patch (it cites finding ids /
+    probe ids / finding types / source finding). ``status`` distinguishes a patch
+    that was applied AND resolved its finding from one that was applied but the
+    risk is still unresolved (or requires human review), or a rejected/unlinked
+    proposal.
+    """
+    op = patch_operation
     detail = (
-        patch_operation.clause_id
-        or patch_operation.path
-        or patch_operation.mask_type
-        or patch_operation.block_type
-        or patch_operation.category
+        op.clause_id
+        or op.path
+        or op.mask_type
+        or op.block_type
+        or op.category
         or ""
     )
+    source_ids = list(op.source_finding_ids)
+    source_probes = list(op.source_probe_ids)
+    source_types = list(op.source_finding_types)
+    label = remediation.patch_lineage_label(op)
+    addressed = set(source_types) or ({op.source_finding} if op.source_finding else set())
+    unresolved = set(unresolved_finding_types or [])
+    if not source_ids and not source_probes and not source_types and not op.source_finding:
+        status = "rejected_unlinked"
+    elif op.operation is PatchOp.require_human_review_for_category:
+        status = "applied_requires_human_review"
+    elif addressed & unresolved:
+        status = "applied_but_risk_unresolved"
+    else:
+        status = "applied_and_resolved"
     return {
-        "operation": _value(patch_operation.operation),
-        "target": patch_operation.target,
+        "operation": _value(op.operation),
+        "target": op.target,
         "detail": detail,
-        "source_finding": patch_operation.source_finding,
-        "is_safety_rail": patch_operation.operation
-        is PatchOp.insert_or_update_critical_safety_rail,
+        "source_finding": op.source_finding,
+        "source_finding_ids": source_ids,
+        "source_probe_ids": source_probes,
+        "source_finding_types": source_types,
+        "source_label": label,
+        "status": status,
+        "is_safety_rail": op.operation is PatchOp.insert_or_update_critical_safety_rail,
     }
 
 
@@ -366,14 +393,78 @@ def _safety_rail_preview(report) -> str:
     return _NO_SAFETY_RAIL_PREVIEW
 
 
+def build_remediation_model(report) -> dict:
+    """Honest remediation-effectiveness view: resolved vs unresolved + telemetry.
+
+    Distinguishes "patch applied" from "risk fixed". When patches were applied
+    but blocking findings remain (after_score 0), it carries an explicit
+    explanation so the UI never reads as a fake green success.
+    """
+    meta = report.metadata
+    before_findings = [
+        format_finding_row(f) for r in report.before_results for f in r.findings
+    ]
+    unresolved_findings = [
+        format_finding_row(f) for r in report.after_results for f in r.findings
+    ]
+    before_types = {f["finding_type"] for f in before_findings}
+    unresolved_types = {f["finding_type"] for f in unresolved_findings}
+    resolved_types = sorted(before_types - unresolved_types)
+    patch_count = len(report.patch_operations_applied)
+    explanation = ""
+    if patch_count and report.after_score == 0 and unresolved_findings:
+        explanation = (
+            "Patches were applied, but blocking findings remained in retest. "
+            "Noxus refused to mark this target safe."
+        )
+    elif patch_count and unresolved_findings:
+        explanation = (
+            "Some patches resolved findings; unresolved findings still require "
+            "human review."
+        )
+    return {
+        "patch_application_count": patch_count,
+        "patched_policy_effective": getattr(meta, "patched_policy_effective", False),
+        "patched_system_prompt_effective": getattr(
+            meta, "patched_system_prompt_effective", False
+        ),
+        "resolved_probe_count": getattr(meta, "resolved_probe_count", 0),
+        "unresolved_probe_count": getattr(meta, "unresolved_probe_count", 0),
+        "resolved_finding_count": getattr(meta, "resolved_finding_count", 0),
+        "unresolved_finding_count": getattr(meta, "unresolved_finding_count", 0),
+        "rejected_proposal_count": getattr(meta, "rejected_proposal_count", 0),
+        "resolved_finding_types": resolved_types,
+        "unresolved_findings": unresolved_findings,
+        "human_review_categories": list(report.human_review_requirements),
+        "after_score": report.after_score,
+        "blocking_explanation": explanation,
+    }
+
+
 def build_red_blue_dashboard_model(report) -> dict:
-    """Red side = probes/findings; Blue side = patches/safety rails."""
-    patch_rows = [format_patch_row(op) for op in report.patch_operations_applied]
+    """Red side = probes/findings; Blue side = patches/safety rails.
+
+    Blue-side patch rows carry evidence lineage + a resolved/unresolved status,
+    plus rejected (unlinked) proposals that were NOT applied. Human-review
+    categories are the deterministic, evidence-anchored list.
+    """
+    unresolved_finding_types = {
+        f.finding_type for r in report.after_results for f in r.findings
+    }
+    patch_rows = [
+        format_patch_row(op, unresolved_finding_types)
+        for op in report.patch_operations_applied
+    ]
+    rejected_rows = [
+        format_patch_row(op, unresolved_finding_types)
+        for op in getattr(report, "rejected_patch_operations", [])
+    ]
     baseline_probes = [format_probe_row(r) for r in report.before_results]
     red_probes = [format_probe_row(r) for r in report.after_results]
     red_findings = [
         format_finding_row(f) for r in report.after_results for f in r.findings
     ]
+    remediation_model = build_remediation_model(report)
     return {
         "red": {
             "title": "Red Team — probes & findings",
@@ -388,6 +479,7 @@ def build_red_blue_dashboard_model(report) -> dict:
         "blue": {
             "title": "Blue Team — patches & safety rails",
             "patches": patch_rows,
+            "rejected_proposals": rejected_rows,
             "patch_engine_note": (
                 "Patches are applied only by the deterministic patch engine; "
                 "agents propose, they never apply."
@@ -395,6 +487,10 @@ def build_red_blue_dashboard_model(report) -> dict:
             "safety_rail_preview": _safety_rail_preview(report),
             "human_review_requirements": list(report.human_review_requirements),
             "open_risks": list(report.open_risks),
+            "remediation": remediation_model,
+            "resolved_finding_types": remediation_model["resolved_finding_types"],
+            "unresolved_findings": remediation_model["unresolved_findings"],
+            "blocking_explanation": remediation_model["blocking_explanation"],
         },
     }
 

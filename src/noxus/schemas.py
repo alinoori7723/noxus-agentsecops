@@ -211,6 +211,12 @@ class PatchOperation(BaseModel):
     category: Optional[str] = None
     # Traceability back to the finding that motivated this patch.
     source_finding: Optional[str] = None
+    # Evidence lineage (backward-compatible; default empty). Populated
+    # deterministically by ``remediation.attach_patch_lineage`` so every applied
+    # patch cites the finding(s)/probe(s) it addresses (no "not specified").
+    source_finding_ids: list[str] = Field(default_factory=list)
+    source_probe_ids: list[str] = Field(default_factory=list)
+    source_finding_types: list[str] = Field(default_factory=list)
 
 
 class PatchSet(BaseModel):
@@ -270,6 +276,19 @@ class ReportMetadata(BaseModel):
     #   "red_team_augmented"      agent mode, Red Team succeeded (baseline + probes)
     #   "degraded_fallback"       agent mode, Red Team failed -> deterministic baseline
     evidence_basis: Optional[str] = None
+    # Remediation-effectiveness telemetry (presentation/audit only; never affects
+    # scoring/readiness). Lets the UI distinguish "patch applied" from "risk
+    # fixed", and verifies the retest ran against the patched target.
+    patched_policy_effective: bool = False
+    patched_system_prompt_effective: bool = False
+    patch_application_count: int = 0
+    resolved_probe_count: int = 0
+    unresolved_probe_count: int = 0
+    resolved_finding_count: int = 0
+    unresolved_finding_count: int = 0
+    # Count of LLM-proposed patch operations rejected for missing evidence lineage
+    # (never applied, never counted as remediation).
+    rejected_proposal_count: int = 0
 
 
 class ReadinessReport(BaseModel):
@@ -279,6 +298,9 @@ class ReadinessReport(BaseModel):
     before_results: list[ProbeResult] = Field(default_factory=list)
     after_results: list[ProbeResult] = Field(default_factory=list)
     patch_operations_applied: list[PatchOperation] = Field(default_factory=list)
+    # LLM-proposed operations rejected for missing evidence lineage. Recorded for
+    # an honest audit trail; NEVER applied and NEVER counted as remediation.
+    rejected_patch_operations: list[PatchOperation] = Field(default_factory=list)
     before_score: int = 0
     after_score: int = 0
     readiness_state: ReadinessState = ReadinessState.FAIL

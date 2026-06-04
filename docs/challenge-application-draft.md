@@ -50,7 +50,7 @@ It closes the loop with bounded, cooperating agents:
   patch engine applies changes.
 - An **AST/static scope guard** blocks forbidden cloud/provider SDK imports and
   keeps the web framework (FastAPI) isolated to the API adapter (`api_server.py`).
-- Release verification: **354 Python tests** (plus **36 frontend tests**),
+- Release verification: **405 Python tests** (plus **42 frontend tests**),
   including 35 deterministic regression tests, plus a
   Vitest frontend suite.
 
@@ -89,9 +89,16 @@ All four engineering milestones are complete and accepted:
 
 ## J. Limitations / honesty
 
+Noxus is a bounded agentic audit and remediation-readiness loop. It proposes
+schema-bound remediations, applies only deterministic allowed patches, measures
+which findings were resolved, and refuses to mark the target safe when
+unsupported risks remain.
+
 - **Not** a runtime firewall.
 - **Not** a compliance certification engine.
 - **No** production traffic interception.
+- **Not** full autonomous remediation — it does not automatically secure the
+  target; unresolved risks stay open for human review.
 - Proprietary-context exposure **intentionally remains an open risk** in the
   current demo (no approved auto-remediation), so the demo ends at
   `CONDITIONAL_PASS` rather than a fabricated `PASS`.

@@ -162,3 +162,43 @@ def test_dockerignore_excludes_release_artifacts():
     )
     for needle in required:
         assert needle in text, f".dockerignore must exclude {needle!r}"
+
+
+# --------------------------------------------------------------------------- #
+# Fix 5 — release metadata single-source consistency (explicit named tests)
+# --------------------------------------------------------------------------- #
+def test_dockerfile_count_matches_release_metadata():
+    assert _dockerfile_py_count() == _readme_py_count()
+
+
+def test_docs_count_matches_release_metadata():
+    py = _dockerfile_py_count()
+    for name in ("submission-checklist.md", "challenge-application-draft.md", "demo-script.md"):
+        text = (DOCS_DIR / name).read_text(encoding="utf-8")
+        assert str(py) in text, f"{name} must reference the release Python count {py}"
+
+
+def test_frontend_count_matches_release_metadata():
+    py = _dockerfile_py_count()
+    fe = _readme_fe_count()
+    header = TOP_HEADER.read_text(encoding="utf-8")
+    m = re.search(r"proof\?\.test_count\s*\?\?\s*(\d+)", header)
+    assert m and int(m.group(1)) == py
+    assert f"{fe} frontend tests" in header
+    assert f"{py} Python + {fe} frontend tests" in SAFEGUARDS.read_text(encoding="utf-8")
+
+
+def test_api_proof_count_matches_release_metadata_named():
+    py = _dockerfile_py_count()
+    assert api_core.proof_indicators(test_count=py)["test_count"] == py == _readme_py_count()
+
+
+def test_no_stale_release_counts_on_active_surfaces():
+    py, fe = _dockerfile_py_count(), _readme_fe_count()
+    surfaces = DOC_FILES + [TOP_HEADER, SAFEGUARDS, DOCKERFILE]
+    for path in surfaces:
+        text = path.read_text(encoding="utf-8")
+        for s in STALE_COUNT_CLAIMS:
+            if str(py) in s or f"{fe} frontend" in s:
+                continue
+            assert s not in text, f"{path.name} has a stale release count: {s!r}"

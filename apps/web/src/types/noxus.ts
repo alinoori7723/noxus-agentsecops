@@ -120,12 +120,39 @@ export interface ProbeRow {
   findings: FindingRow[];
 }
 
+export type PatchStatus =
+  | "applied_and_resolved"
+  | "applied_but_risk_unresolved"
+  | "applied_requires_human_review"
+  | "rejected_unlinked";
+
 export interface PatchRow {
   operation: string;
   target: string;
   detail: string;
   source_finding: string | null;
+  source_finding_ids: string[];
+  source_probe_ids: string[];
+  source_finding_types: string[];
+  source_label: string;
+  status: PatchStatus;
   is_safety_rail: boolean;
+}
+
+export interface RemediationModel {
+  patch_application_count: number;
+  patched_policy_effective: boolean;
+  patched_system_prompt_effective: boolean;
+  resolved_probe_count: number;
+  unresolved_probe_count: number;
+  resolved_finding_count: number;
+  unresolved_finding_count: number;
+  rejected_proposal_count: number;
+  resolved_finding_types: string[];
+  unresolved_findings: FindingRow[];
+  human_review_categories: string[];
+  after_score: number;
+  blocking_explanation: string;
 }
 
 export interface RedBlueModel {
@@ -142,10 +169,15 @@ export interface RedBlueModel {
   blue: {
     title: string;
     patches: PatchRow[];
+    rejected_proposals: PatchRow[];
     patch_engine_note: string;
     safety_rail_preview: string;
     human_review_requirements: string[];
     open_risks: string[];
+    remediation: RemediationModel;
+    resolved_finding_types: string[];
+    unresolved_findings: FindingRow[];
+    blocking_explanation: string;
   };
 }
 

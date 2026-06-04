@@ -1,5 +1,5 @@
-import { Swords, ShieldCheck, Wrench, ArrowRight } from "lucide-react";
-import type { ProbeRow, PatchRow, RedBlueModel } from "../types/noxus";
+import { Swords, ShieldCheck, Wrench, ArrowRight, AlertTriangle } from "lucide-react";
+import type { ChipColor, PatchRow, ProbeRow, RedBlueModel } from "../types/noxus";
 import { StatusChip } from "./StatusChip";
 
 const SAFETY_RAIL_HEADING = "[CRITICAL_SAFETY_RAILS]";
@@ -37,7 +37,18 @@ function ProbeCard({ probe }: { probe: ProbeRow }) {
   );
 }
 
+const PATCH_STATUS_META: Record<string, { label: string; color: ChipColor }> = {
+  applied_and_resolved: { label: "applied · resolved", color: "green" },
+  applied_but_risk_unresolved: { label: "applied · risk unresolved", color: "amber" },
+  applied_requires_human_review: { label: "applied · human review", color: "amber" },
+  rejected_unlinked: { label: "rejected · unlinked", color: "red" },
+};
+
 function PatchCard({ patch }: { patch: PatchRow }) {
+  const status = PATCH_STATUS_META[patch.status] ?? {
+    label: patch.status,
+    color: "neutral" as ChipColor,
+  };
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -45,13 +56,14 @@ function PatchCard({ patch }: { patch: PatchRow }) {
           {patch.operation}
         </code>
         {patch.is_safety_rail && <StatusChip label="safety rail" color="green" />}
+        <StatusChip label={status.label} color={status.color} />
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
         <StatusChip label={patch.target} color="blue" />
         {patch.detail && <StatusChip label={patch.detail} color="neutral" mono />}
       </div>
       <p className="mt-2 text-[11px] text-slate-500">
-        Source finding: {patch.source_finding ?? "not specified"}
+        Source finding: <span className="font-mono text-slate-700">{patch.source_label}</span>
       </p>
     </div>
   );
@@ -59,6 +71,7 @@ function PatchCard({ patch }: { patch: PatchRow }) {
 
 export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
   const { red, blue } = model;
+  const rem = blue.remediation;
   const preview = blue.safety_rail_preview;
   const hasRealRail = preview.includes(SAFETY_RAIL_HEADING);
   const failing = red.baseline_probes.filter((p) => !p.passed);
@@ -143,6 +156,39 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
           </div>
           <div className="space-y-3 p-4">
             <div className="kicker flex items-center gap-1.5">
+              <Wrench size={13} /> Remediation effectiveness
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <StatusChip
+                label={`applied: ${rem.patch_application_count}`}
+                color="blue"
+              />
+              <StatusChip
+                label={`resolved findings: ${rem.resolved_finding_count}`}
+                color="green"
+              />
+              <StatusChip
+                label={`unresolved findings: ${rem.unresolved_finding_count}`}
+                color={rem.unresolved_finding_count > 0 ? "amber" : "green"}
+              />
+              {rem.rejected_proposal_count > 0 && (
+                <StatusChip
+                  label={`rejected proposals: ${rem.rejected_proposal_count}`}
+                  color="red"
+                />
+              )}
+            </div>
+            {blue.blocking_explanation && (
+              <div
+                className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50/70 p-3 text-[12px] font-medium text-amber-800"
+                role="alert"
+              >
+                <AlertTriangle size={15} className="mt-0.5 shrink-0" />
+                <span>{blue.blocking_explanation}</span>
+              </div>
+            )}
+
+            <div className="kicker flex items-center gap-1.5 pt-1">
               <Wrench size={13} /> Patch operations
             </div>
             <p className="text-[11.5px] leading-relaxed text-slate-500">
@@ -151,6 +197,17 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
             {blue.patches.map((p, i) => (
               <PatchCard key={i} patch={p} />
             ))}
+
+            {blue.rejected_proposals.length > 0 && (
+              <>
+                <div className="kicker pt-1">
+                  Rejected / unlinked proposals (not applied)
+                </div>
+                {blue.rejected_proposals.map((p, i) => (
+                  <PatchCard key={`rej-${i}`} patch={p} />
+                ))}
+              </>
+            )}
 
             <div className="kicker pt-1">Safety rail preview</div>
             <div className="rounded-lg border border-slate-200 bg-white p-3">

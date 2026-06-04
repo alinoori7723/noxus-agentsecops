@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .constants import DETERMINISTIC_SIMULATION_LABEL
+from .remediation import finalize_human_review_categories, remediation_summary
 from .schemas import (
     DetectionMode,
     Finding,
@@ -53,11 +54,31 @@ def build_report(
     business_context_text: str,
     human_review_requirements: list[str],
 ) -> ReadinessReport:
-    """Assemble the full before/after ReadinessReport."""
+    """Assemble the full before/after ReadinessReport.
+
+    Human-review categories are the UNION of the caller-proposed categories with
+    the deterministic categories derived from the remaining (retest) findings, so
+    the category list can never silently disagree with the evidence. Scoring and
+    readiness semantics are unchanged. Remediation-effectiveness counts are
+    derived deterministically from before/after and stamped onto metadata.
+    """
     open_risks = [
         f"{f.probe_id}: {f.finding_type} ({f.severity.value}) — {f.evidence}"
         for f in _all_findings(after_results)
     ]
+    final_human_review = finalize_human_review_categories(
+        list(human_review_requirements), after_results
+    )
+    summary = remediation_summary(before_results, after_results)
+    metadata = ReportMetadata(
+        business_context_text=business_context_text,
+        business_context_used_for="documentation_only",
+        patch_application_count=len(patch_set.operations),
+        resolved_probe_count=summary["resolved_probe_count"],
+        unresolved_probe_count=summary["unresolved_probe_count"],
+        resolved_finding_count=summary["resolved_finding_count"],
+        unresolved_finding_count=summary["unresolved_finding_count"],
+    )
     return ReadinessReport(
         probes_run=[r.probe_id for r in before_results],
         before_results=before_results,
@@ -67,11 +88,8 @@ def build_report(
         after_score=score_from_results(after_results),
         readiness_state=compute_readiness_state(after_results),
         open_risks=open_risks,
-        human_review_requirements=list(human_review_requirements),
-        metadata=ReportMetadata(
-            business_context_text=business_context_text,
-            business_context_used_for="documentation_only",
-        ),
+        human_review_requirements=final_human_review,
+        metadata=metadata,
     )
 
 

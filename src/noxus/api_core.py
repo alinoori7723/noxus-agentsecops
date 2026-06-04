@@ -193,7 +193,10 @@ def sample_inputs() -> dict:
     return {
         "system_prompt": _read_sample("system_prompt.txt"),
         "security_policy_yaml": _read_sample("security_policy.yaml"),
-        "business_context": _read_sample("business_context.md"),
+        # Clean demo fixture: a realistic untrusted SupportBot case bundle. It
+        # describes the TARGET app's material and contains target-facing
+        # adversarial content; it never instructs the auditor what to detect.
+        "business_context": _read_sample("support_case_base.md"),
     }
 
 
@@ -627,6 +630,7 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
     # scoring change, no API key/provider config). The nested
     # readiness/metadata/report shapes are preserved unchanged above/below.
     after_finding_count = sum(len(r.findings) for r in report.after_results)
+    rmeta = report.metadata
     summary_aliases = {
         "readiness_state": _ev(report.readiness_state),
         "before_score": report.before_score,
@@ -634,17 +638,30 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "patch_count": len(report.patch_operations_applied),
         "open_risk_count": len(report.open_risks),
         "finding_count": after_finding_count,
-        "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
-        "evidence_basis": getattr(report.metadata, "evidence_basis", None),
+        "tuning_iterations": getattr(rmeta, "tuning_iterations", 0),
+        "evidence_basis": getattr(rmeta, "evidence_basis", None),
         # Present (value) on a schema-contract abort, else None.
-        "failed_stage": getattr(report.metadata, "failed_stage", None),
-        "failed_role": getattr(report.metadata, "failed_role", None),
+        "failed_stage": getattr(rmeta, "failed_stage", None),
+        "failed_role": getattr(rmeta, "failed_role", None),
+        # Remediation-effectiveness aliases (distinguish "applied" from "fixed").
+        "resolved_probe_count": getattr(rmeta, "resolved_probe_count", 0),
+        "unresolved_probe_count": getattr(rmeta, "unresolved_probe_count", 0),
+        "resolved_finding_count": getattr(rmeta, "resolved_finding_count", 0),
+        "unresolved_finding_count": getattr(rmeta, "unresolved_finding_count", 0),
+        "patched_policy_effective": getattr(rmeta, "patched_policy_effective", False),
+        "patched_system_prompt_effective": getattr(
+            rmeta, "patched_system_prompt_effective", False
+        ),
+        "rejected_proposal_count": getattr(rmeta, "rejected_proposal_count", 0),
+        "human_review_categories": list(report.human_review_requirements),
     }
+    red_blue = ui_formatters.build_red_blue_dashboard_model(report)
     return {
         **summary_aliases,
         "readiness": ui_formatters.build_readiness_summary_model(report),
         "timeline": ui_formatters.build_demo_timeline_model(report),
-        "red_blue": ui_formatters.build_red_blue_dashboard_model(report),
+        "red_blue": red_blue,
+        "remediation": red_blue["blue"]["remediation"],
         "evidence": ui_formatters.build_evidence_report_model(report),
         "safeguards": ui_formatters.build_engineering_safeguards_model(),
         "agent_trace": trace,
@@ -658,6 +675,10 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
             "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
             "max_tuning_iterations": MAX_TUNING_ITERATIONS,
             "evidence_basis": getattr(report.metadata, "evidence_basis", None),
+            "patched_policy_effective": getattr(rmeta, "patched_policy_effective", False),
+            "patched_system_prompt_effective": getattr(
+                rmeta, "patched_system_prompt_effective", False
+            ),
         },
         # Raw report (no API key) so the client can request a local audit export
         # without the server holding any per-session state.
