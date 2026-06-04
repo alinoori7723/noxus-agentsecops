@@ -19,7 +19,7 @@ function Chip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 }
 
 export function TopHeader({ title, subtitle, proof, online }: TopHeaderProps) {
-  const pyTests = proof?.test_count ?? 351;
+  const pyTests = proof?.test_count ?? 354;
   const maxIter = proof?.max_tuning_iterations ?? 2;
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">

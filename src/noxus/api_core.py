@@ -622,7 +622,26 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
             # Sanitized (<=500 chars, secrets redacted) by json_contracts.
             "debug_excerpt": getattr(meta, "semantic_judge_failure_excerpt", None),
         }
+    # Non-breaking, top-level SUMMARY ALIASES. These are a flat convenience view
+    # derived ENTIRELY from the same real report object (no new semantics, no
+    # scoring change, no API key/provider config). The nested
+    # readiness/metadata/report shapes are preserved unchanged above/below.
+    after_finding_count = sum(len(r.findings) for r in report.after_results)
+    summary_aliases = {
+        "readiness_state": _ev(report.readiness_state),
+        "before_score": report.before_score,
+        "after_score": report.after_score,
+        "patch_count": len(report.patch_operations_applied),
+        "open_risk_count": len(report.open_risks),
+        "finding_count": after_finding_count,
+        "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
+        "evidence_basis": getattr(report.metadata, "evidence_basis", None),
+        # Present (value) on a schema-contract abort, else None.
+        "failed_stage": getattr(report.metadata, "failed_stage", None),
+        "failed_role": getattr(report.metadata, "failed_role", None),
+    }
     return {
+        **summary_aliases,
         "readiness": ui_formatters.build_readiness_summary_model(report),
         "timeline": ui_formatters.build_demo_timeline_model(report),
         "red_blue": ui_formatters.build_red_blue_dashboard_model(report),

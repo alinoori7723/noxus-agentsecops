@@ -531,3 +531,64 @@ def test_policy_schema_error_has_no_raw_pydantic_dump():
     assert "pydantic" not in blob
     assert "extra inputs are not permitted" not in blob
     assert "errors.pydantic.dev" not in blob
+
+
+# --------------------------------------------------------------------------- #
+# Top-level summary aliases (non-breaking flat convenience view)
+# --------------------------------------------------------------------------- #
+_ALIAS_KEYS = (
+    "readiness_state", "before_score", "after_score", "patch_count",
+    "open_risk_count", "finding_count", "tuning_iterations", "evidence_basis",
+    "failed_stage", "failed_role",
+)
+
+
+def test_assessment_response_has_top_level_summary_aliases():
+    _report, resp = api_core.run_assessment(_det_request())
+    for key in _ALIAS_KEYS:
+        assert key in resp, f"missing top-level alias {key!r}"
+    # Nested shapes are preserved, not replaced.
+    assert "readiness" in resp and "metadata" in resp and "report" in resp
+
+
+def test_top_level_aliases_match_nested_report_values():
+    _report, resp = api_core.run_assessment(_det_request())
+    rep = resp["report"]
+    assert resp["readiness_state"] == rep["readiness_state"]
+    assert resp["before_score"] == rep["before_score"] == resp["readiness"]["before_score"]
+    assert resp["after_score"] == rep["after_score"] == resp["readiness"]["after_score"]
+    assert resp["patch_count"] == len(rep["patch_operations_applied"])
+    assert resp["open_risk_count"] == len(rep["open_risks"])
+    assert resp["finding_count"] == sum(len(r["findings"]) for r in rep["after_results"])
+    assert resp["tuning_iterations"] == resp["metadata"]["tuning_iterations"]
+    assert resp["evidence_basis"] == resp["metadata"]["evidence_basis"]
+    # Honest: deterministic sample is CONDITIONAL_PASS with an open risk, not PASS.
+    assert resp["readiness_state"] == "CONDITIONAL_PASS"
+    assert resp["open_risk_count"] >= 1
+
+
+def test_top_level_aliases_do_not_include_api_key():
+    provider = FakeLLMProvider(
+        red=m2_data.VALID_PROBE_BATCH,
+        judge=m2_data.VALID_JUDGMENT_NO_VIOLATION,
+        tuning=m2_data.EMPTY_PATCHSET,
+    )
+    report = run_readiness_assessment(
+        system_prompt=m2_data.SAMPLE_SYSTEM_PROMPT,
+        policy=m2_data.SAMPLE_POLICY,
+        business_context_text=m2_data.SAMPLE_BUSINESS_CONTEXT,
+        mode="agent_assisted",
+        provider=provider,
+    )
+    cfg = api_core.ProviderConfig(
+        provider_type="gemini_native", api_key=_SENTINEL_KEY,
+        red_model="rm", judge_model="jm", tuning_model="tm",
+    )
+    resp = api_core.build_assessment_response(
+        report, mode="agent_assisted", provider_config=cfg
+    )
+    alias_blob = json.dumps({k: resp[k] for k in _ALIAS_KEYS})
+    assert _SENTINEL_KEY not in alias_blob
+    # Alias values are plain scalars (str/int/None), never nested provider config.
+    for k in _ALIAS_KEYS:
+        assert resp[k] is None or isinstance(resp[k], (str, int))

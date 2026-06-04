@@ -16,12 +16,12 @@ git tag --list
 
 ## Tests
 
-- [ ] Full suite green (release verification: **351 Python tests** with dev extras installed).
+- [ ] Full suite green (release verification: **354 Python tests** with dev extras installed).
 - [ ] Frontend tests green (**36 frontend tests**).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # release-verified at 351 Python tests (httpx from dev extras)
+.venv/bin/pytest -q          # release-verified at 354 Python tests (httpx from dev extras)
 cd apps/web && npm ci && npm run test && cd -
 ```
 
