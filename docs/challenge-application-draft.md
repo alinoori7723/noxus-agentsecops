@@ -50,7 +50,8 @@ It closes the loop with bounded, cooperating agents:
   patch engine applies changes.
 - An **AST/static scope guard** blocks forbidden cloud/provider SDK imports and
   keeps the web framework (FastAPI) isolated to the API adapter (`api_server.py`).
-- **201 automated tests**, including 35 deterministic regression tests, plus a
+- Release verification: **351 Python tests** (plus **36 frontend tests**),
+  including 35 deterministic regression tests, plus a
   Vitest frontend suite.
 
 ## G. Google ecosystem fit

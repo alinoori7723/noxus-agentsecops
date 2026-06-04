@@ -20,6 +20,7 @@ import { OpenRisks } from "./components/OpenRisks";
 import { EngineeringSafeguards } from "./components/EngineeringSafeguards";
 import { PolicyError } from "./components/PolicyError";
 import { PartialRunBanner } from "./components/PartialRunBanner";
+import { RedTeamFallbackNotice } from "./components/RedTeamFallbackNotice";
 import {
   getHealth,
   getProof,
@@ -301,6 +302,9 @@ export default function App() {
               <div className="space-y-6">
                 {result.schema_failure && (
                   <PartialRunBanner failure={result.schema_failure} />
+                )}
+                {result.red_team_failure?.continued_after_red_failure && (
+                  <RedTeamFallbackNotice failure={result.red_team_failure} />
                 )}
                 <ReadinessSummary model={result.readiness} />
                 <RoleObservability

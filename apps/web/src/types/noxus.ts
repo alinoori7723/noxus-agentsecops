@@ -170,7 +170,12 @@ export interface SafeguardItem {
 }
 
 export type AgentRole = "red" | "judge" | "tuning";
-export type StageStatus = "used" | "not_used" | "failed" | "human_review_required";
+export type StageStatus =
+  | "used"
+  | "not_used"
+  | "failed"
+  | "skipped"
+  | "human_review_required";
 
 export interface AgentTraceStage {
   stage: string;
@@ -190,6 +195,17 @@ export interface AgentTrace {
   tuning_model: string | null;
   semantic_judgment_source: string;
   patch_proposal_source: string;
+  // Red-Team resilience trace (presentation-only). Non-null fallback_used means
+  // the Red Team failed and the loop continued on deterministic baseline data.
+  fallback_used: string | null;
+  fallback_reason: string | null;
+  continued_after_red_failure: boolean;
+  baseline_probe_count: number;
+  baseline_finding_count: number;
+  // Which evidence base the before/after metrics were computed over, and the
+  // semantic-judge resilience status (so a degraded run is never silent).
+  evidence_basis: "deterministic_baseline" | "red_team_augmented" | "degraded_fallback" | null;
+  semantic_judge_status: "used" | "failed" | "skipped" | null;
   stages: AgentTraceStage[];
 }
 
@@ -214,6 +230,40 @@ export interface SchemaFailure {
   reason: string;
 }
 
+// Red Team failure diagnostics. Present whenever the Red Team Agent failed its
+// schema contract — both for a degraded-but-continued run (fallback to the
+// deterministic baseline) and for an abort. Honest, never hidden.
+export interface RedTeamFailure {
+  failed: boolean;
+  failed_stage: string;
+  failed_role: AgentRole;
+  source: string;
+  fallback_used: string | null;
+  fallback_reason: string | null;
+  continued_after_red_failure: boolean;
+  baseline_preserved: boolean;
+  baseline_probe_count: number;
+  baseline_finding_count: number;
+  debug_excerpt: string | null;
+}
+
+// Semantic Judge failure diagnostics. Present when the judge broke its schema
+// contract but the loop DEGRADED and continued on deterministic + valid
+// red-team evidence (no semantic findings fabricated). Symmetric with
+// RedTeamFailure.
+export interface SemanticJudgeFailure {
+  failed: boolean;
+  failed_stage: string;
+  failed_role: AgentRole;
+  source: string;
+  fallback_basis: string | null;
+  continued: boolean;
+  baseline_preserved: boolean;
+  baseline_probe_count: number;
+  baseline_finding_count: number;
+  debug_excerpt: string | null;
+}
+
 export interface ProviderTestResponse {
   ok: boolean;
   provider_type: string;
@@ -231,10 +281,13 @@ export interface AssessmentResponse {
   execution_mode: string;
   provider_type: string | null;
   schema_failure: SchemaFailure | null;
+  red_team_failure: RedTeamFailure | null;
+  semantic_judge_failure: SemanticJudgeFailure | null;
   metadata: {
     mode: string;
     tuning_iterations: number;
     max_tuning_iterations: number;
+    evidence_basis: "deterministic_baseline" | "red_team_augmented" | "degraded_fallback" | null;
   };
   report: unknown;
 }

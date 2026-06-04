@@ -238,6 +238,38 @@ class ReportMetadata(BaseModel):
     failed_stage: Optional[str] = None
     failed_role: Optional[str] = None
     schema_failure_excerpt: Optional[str] = None
+    # Presentation-only Red-Team resilience telemetry. When the Red Team Agent
+    # fails schema validation but the deterministic baseline already produced
+    # findings, the loop DEGRADES rather than aborting: it continues using the
+    # deterministic baseline probes/findings as the fallback evidence source.
+    # These fields record that honestly (they never fabricate a Red Team success
+    # and never affect scoring/readiness):
+    #   red_team_status            "used" | "failed" | None (deterministic mode)
+    #   fallback_used              "deterministic_baseline" | None
+    #   fallback_reason            "red_team_schema_contract_failure" | None
+    #   continued_after_red_failure  True only when the loop continued past a
+    #                                Red Team failure on baseline evidence
+    #   red_team_failure_excerpt   sanitized (<=500 chars, secrets redacted)
+    red_team_status: Optional[str] = None
+    fallback_used: Optional[str] = None
+    fallback_reason: Optional[str] = None
+    continued_after_red_failure: bool = False
+    red_team_failure_excerpt: Optional[str] = None
+    # Presentation-only Semantic-Judge resilience telemetry (symmetric with the
+    # Red-Team fields above). The judge SUPPLEMENTS deterministic findings; if it
+    # breaks its schema contract the loop DEGRADES — it drops the (unusable)
+    # semantic supplement, keeps the deterministic + valid red-team evidence, and
+    # continues to policy tuning. It never fabricates semantic findings.
+    #   semantic_judge_status         "used" | "failed" | "skipped" | None
+    #   semantic_judge_failure_excerpt sanitized (<=500 chars, secrets redacted)
+    semantic_judge_status: Optional[str] = None
+    semantic_judge_failure_excerpt: Optional[str] = None
+    # Presentation-only label for WHICH evidence base the before/after metrics were
+    # computed over, so a degraded run never silently compares different bases:
+    #   "deterministic_baseline"  pure deterministic mode
+    #   "red_team_augmented"      agent mode, Red Team succeeded (baseline + probes)
+    #   "degraded_fallback"       agent mode, Red Team failed -> deterministic baseline
+    evidence_basis: Optional[str] = None
 
 
 class ReadinessReport(BaseModel):

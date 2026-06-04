@@ -121,6 +121,7 @@ def _run_deterministic(
     # Presentation telemetry only: expose the REAL patched system prompt so the
     # UI can render an honest safety-rail preview (no scoring/state impact).
     report.after_system_prompt = patched_prompt
+    report.metadata.evidence_basis = "deterministic_baseline"
     return report
 
 
@@ -187,18 +188,39 @@ _STAGE_ROLE = {
 }
 
 
+def _stamp_red_fallback(metadata: ReportMetadata, ctx: Optional[dict]) -> None:
+    """Stamp Red-Team resilience telemetry onto report metadata (presentation only).
+
+    ``ctx`` is the small context dict assembled by the orchestrator when the Red
+    Team Agent failed. It records, honestly, that the Red Team failed and (if
+    applicable) that the loop continued on deterministic baseline evidence. It
+    never affects scoring or readiness.
+    """
+    if not ctx:
+        return
+    metadata.red_team_status = ctx.get("red_team_status")
+    metadata.fallback_used = ctx.get("fallback_used")
+    metadata.fallback_reason = ctx.get("fallback_reason")
+    metadata.continued_after_red_failure = bool(ctx.get("continued_after_red_failure"))
+    metadata.red_team_failure_excerpt = ctx.get("red_team_failure_excerpt")
+
+
 def _human_review_report(
     stage: str,
     error: Exception,
     before_results: Optional[list[ProbeResult]],
     business_context_text: str,
+    fallback_ctx: Optional[dict] = None,
 ) -> ReadinessReport:
     """Build a HUMAN_REVIEW_REQUIRED report that PRESERVES the deterministic baseline.
 
     When the deterministic baseline already ran, its probes/findings/evidence are
     kept in the report so the UI shows partial evidence instead of a blank state.
     The failed stage, role, and a sanitized output excerpt are recorded as
-    presentation-only metadata.
+    presentation-only metadata. ``fallback_ctx`` (when present) additionally
+    records that the Red Team Agent failed earlier and the loop continued on
+    deterministic baseline evidence before THIS stage failed — so a report can
+    honestly show BOTH failed stages with the baseline preserved.
     """
     before = before_results or []
     # Sanitize the error text (redact secrets, cap length) before it reaches any
@@ -219,6 +241,15 @@ def _human_review_report(
     # SchemaContractError carries a pre-sanitized excerpt; for any other error
     # (e.g. a Pydantic ValidationError from a bad LLM patch) sanitize its text.
     excerpt = getattr(error, "raw_excerpt", None) or safe_error
+    metadata = ReportMetadata(
+        business_context_text=business_context_text,
+        mode="agent_assisted",
+        tuning_iterations=0,
+        failed_stage=stage,
+        failed_role=_STAGE_ROLE.get(stage),
+        schema_failure_excerpt=excerpt,
+    )
+    _stamp_red_fallback(metadata, fallback_ctx)
     return ReadinessReport(
         probes_run=[r.probe_id for r in before],
         before_results=before,
@@ -229,14 +260,7 @@ def _human_review_report(
         readiness_state=ReadinessState.HUMAN_REVIEW_REQUIRED,
         open_risks=open_risks,
         human_review_requirements=["schema_contract_failure"],
-        metadata=ReportMetadata(
-            business_context_text=business_context_text,
-            mode="agent_assisted",
-            tuning_iterations=0,
-            failed_stage=stage,
-            failed_role=_STAGE_ROLE.get(stage),
-            schema_failure_excerpt=excerpt,
-        ),
+        metadata=metadata,
     )
 
 
@@ -249,46 +273,140 @@ def _run_agent_assisted(
     judge_model: str,
     tuning_model: str,
 ) -> ReadinessReport:
-    before_results: Optional[list[ProbeResult]] = None
     # Validate the INPUT policy outside the fail-safe try: a malformed input
     # policy is a caller error, not an LLM-caused failure, and must propagate
     # rather than be masked as a schema-contract failure (mirrors deterministic
     # mode). The ValidationError catch below is reserved for LLM patch effects.
     sp = _as_policy(policy)
-    stage = "deterministic_baseline"
+
+    evaluator = DeterministicEvaluator()
+    judge = SemanticJudgeAgent(provider, judge_model)
+    tuner = PolicyTuningAgent(provider, tuning_model)
+
+    current_prompt = system_prompt
+    current_policy = sp
+
+    # 1. DETERMINISTIC BASELINE FIRST — always runs, never depends on the LLM.
+    # Stored immediately so a later agent failure still yields a report with real
+    # baseline probes/findings/evidence (no blank telemetry).
+    baseline_probes = get_probes()
+    baseline_results = evaluator.evaluate(baseline_probes, current_prompt, current_policy)
+    baseline_findings = [f for r in baseline_results for f in r.findings]
+
+    # Red-Team resilience context (presentation-only). Always record that the Red
+    # Team ran ("used"); flip to "failed" + fallback if it breaks the contract.
+    red_team_status = "used"
+    fallback_ctx: Optional[dict] = None
+    continued_after_red_failure = False
+    before_results: list[ProbeResult] = baseline_results
+
+    # 2. Try the Red Team Agent. A Red Team schema failure must NOT kill the loop
+    # when the deterministic baseline already produced findings — it DEGRADES to
+    # the deterministic baseline as the fallback evidence source. We never
+    # fabricate Red Team probes.
+    probes = baseline_probes
     try:
-        evaluator = DeterministicEvaluator()
-        judge = SemanticJudgeAgent(provider, judge_model)
-        tuner = PolicyTuningAgent(provider, tuning_model)
-
-        current_prompt = system_prompt
-        current_policy = sp
-
-        # 1. DETERMINISTIC BASELINE FIRST — always runs, never depends on the LLM.
-        # Stored immediately so a later agent schema failure still yields a report
-        # with real baseline probes/findings/evidence (no blank telemetry).
-        baseline_probes = get_probes()
-        before_results = evaluator.evaluate(
-            baseline_probes, current_prompt, current_policy
-        )
-
-        # 2. Red team probes layered on top of the deterministic baseline.
-        stage = "red_team_generation"
         red = RedTeamAgent(provider, red_model)
         agent_probes = red.generate_probes(system_prompt, sp, business_context_text)
         probes = baseline_probes + agent_probes
-
-        # 3-7. Evaluate the full set + semantic supplement.
-        results = evaluator.evaluate(probes, current_prompt, current_policy)
-        stage = "semantic_judge"
-        results = _apply_semantic_judge(
-            judge, probes, results, current_policy, current_prompt
+    except (SchemaContractError, ValidationError) as red_exc:
+        red_team_status = "failed"
+        red_excerpt = getattr(red_exc, "raw_excerpt", None) or sanitize_excerpt(
+            str(red_exc)
         )
+        if not baseline_findings:
+            # Nothing to fall back to — honest HUMAN_REVIEW_REQUIRED for the red
+            # stage (baseline still preserved, just no findings to remediate).
+            report = _human_review_report(
+                "red_team_generation",
+                red_exc,
+                baseline_results,
+                business_context_text,
+                fallback_ctx={
+                    "red_team_status": "failed",
+                    "fallback_used": None,
+                    "fallback_reason": "red_team_schema_contract_failure",
+                    "continued_after_red_failure": False,
+                    "red_team_failure_excerpt": red_excerpt,
+                },
+            )
+            # Only the deterministic baseline ran; the judge never executed.
+            report.metadata.evidence_basis = "deterministic_baseline"
+            return report
+        # Degrade: continue using the deterministic baseline probes/findings.
+        continued_after_red_failure = True
+        probes = baseline_probes
+        fallback_ctx = {
+            "red_team_status": "failed",
+            "fallback_used": "deterministic_baseline",
+            "fallback_reason": "red_team_schema_contract_failure",
+            "continued_after_red_failure": True,
+            "red_team_failure_excerpt": red_excerpt,
+        }
+
+    # Context stamped onto every report from here on (success OR later failure).
+    if fallback_ctx is None and red_team_status == "used":
+        report_ctx = None
+    else:
+        report_ctx = fallback_ctx
+
+    # Evidence basis + semantic-judge resilience (presentation-only; symmetric
+    # with the Red-Team fallback). The judge SUPPLEMENTS deterministic findings;
+    # if it breaks its schema contract the loop DEGRADES (drops the unusable
+    # semantic supplement, keeps deterministic + valid red-team evidence,
+    # continues to tuning) instead of aborting. It never fabricates findings.
+    if continued_after_red_failure:
+        evidence_basis = "degraded_fallback"
+        semantic_judge_status: Optional[str] = "skipped"
+    else:
+        evidence_basis = "red_team_augmented"
+        semantic_judge_status = "used"
+    judge_failed = False
+    judge_excerpt: Optional[str] = None
+
+    def _maybe_apply_judge(results_in: list[ProbeResult]) -> list[ProbeResult]:
+        nonlocal judge_failed, judge_excerpt, semantic_judge_status
+        # Skip when the run already degraded (red fallback) or the judge has
+        # already failed once this run — never retry a broken contract.
+        if continued_after_red_failure or judge_failed:
+            return results_in
+        try:
+            return _apply_semantic_judge(
+                judge, probes, results_in, current_policy, current_prompt
+            )
+        except (SchemaContractError, ValidationError) as exc:
+            # DEGRADE: drop the (unusable) semantic supplement, keep the
+            # deterministic + valid red-team evidence, and continue to tuning.
+            judge_failed = True
+            semantic_judge_status = "failed"
+            judge_excerpt = getattr(exc, "raw_excerpt", None) or sanitize_excerpt(
+                str(exc)
+            )
+            return results_in
+
+    def _stamp(report: ReadinessReport) -> ReadinessReport:
+        report.metadata.semantic_judge_status = semantic_judge_status
+        report.metadata.semantic_judge_failure_excerpt = judge_excerpt
+        report.metadata.evidence_basis = evidence_basis
+        return report
+
+    # From here, an unrecoverable TUNING/PATCH schema failure routes to
+    # HUMAN_REVIEW_REQUIRED with the baseline preserved AND the prior-stage trace
+    # recorded. A judge failure no longer aborts (it degrades, see above).
+    stage = "policy_tuning"
+    try:
+        # 3. Evaluate the probe set (full set on red success; baseline on fallback).
+        results = evaluator.evaluate(probes, current_prompt, current_policy)
+
+        # 4. Semantic judge — supplement (skipped on red fallback; degrades on
+        # its own schema failure).
+        results = _maybe_apply_judge(results)
         before_results = results
 
         applied_ops = []
         iterations_done = 0
-        # 12. Bounded by MAX_TUNING_ITERATIONS.
+        # 5-7 / 12. Policy tuning bounded by MAX_TUNING_ITERATIONS. In fallback
+        # mode this proposes patches from the deterministic baseline findings.
         while iterations_done < MAX_TUNING_ITERATIONS:
             findings = [f for r in results for f in r.findings]
             if not findings:
@@ -305,12 +423,9 @@ def _run_agent_assisted(
             current_policy = validate_policy(new_policy_dict)
             applied_ops.extend(patch_set.operations)
             iterations_done += 1
-            # 11. Rerun probes (+ semantic supplement).
+            # 11. Rerun probes (+ semantic supplement, unless skipped/degraded).
             results = evaluator.evaluate(probes, current_prompt, current_policy)
-            stage = "semantic_judge"
-            results = _apply_semantic_judge(
-                judge, probes, results, current_policy, current_prompt
-            )
+            results = _maybe_apply_judge(results)
 
         after_results = results
         report = build_report(
@@ -322,14 +437,20 @@ def _run_agent_assisted(
         )
         report.metadata.mode = "agent_assisted"
         report.metadata.tuning_iterations = iterations_done
+        report.metadata.red_team_status = red_team_status
+        _stamp_red_fallback(report.metadata, report_ctx)
         # Presentation telemetry only: the REAL patched prompt after the loop.
         report.after_system_prompt = current_prompt
-        return report
+        return _stamp(report)
 
     except (SchemaContractError, ValidationError) as exc:
-        # 13. Any unrecoverable schema failure -> HUMAN_REVIEW_REQUIRED. A
-        # ValidationError here can only come from validating an LLM-proposed
+        # 13. Any unrecoverable TUNING/PATCH schema failure -> HUMAN_REVIEW_REQUIRED.
+        # A ValidationError here can only come from validating an LLM-proposed
         # patch's effect (the deterministic baseline never raises one); it is
         # converted to a fail-safe partial report rather than crashing the run.
         # Genuine programming errors (other exception types) are NOT swallowed.
-        return _human_review_report(stage, exc, before_results, business_context_text)
+        return _stamp(
+            _human_review_report(
+                stage, exc, before_results, business_context_text, fallback_ctx=report_ctx
+            )
+        )

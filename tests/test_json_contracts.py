@@ -42,8 +42,15 @@ def test_json_contract_does_not_allow_second_repair():
 
 
 def test_schema_contract_error_bubbles_to_orchestrator_human_review_required():
-    # Red team output cannot be parsed/validated even after one repair.
-    provider = FakeLLMProvider(red=m2_data.INVALID_JSON, repair=m2_data.INVALID_JSON)
+    # An unrecoverable tuning-stage schema error still bubbles to a fail-safe
+    # HUMAN_REVIEW_REQUIRED. Here the Red Team also failed first and the loop
+    # degraded to the deterministic baseline before the tuning agent broke its
+    # contract — both failures are recorded and the baseline is preserved.
+    provider = FakeLLMProvider(
+        red=m2_data.INVALID_JSON,
+        tuning=m2_data.INVALID_JSON,
+        repair=m2_data.INVALID_JSON,
+    )
     report = run_readiness_assessment(
         system_prompt=m2_data.SAMPLE_SYSTEM_PROMPT,
         policy=m2_data.SAMPLE_POLICY,
@@ -56,11 +63,12 @@ def test_schema_contract_error_bubbles_to_orchestrator_human_review_required():
     assert report.human_review_requirements == ["schema_contract_failure"]
     # No dirty continuation: no patches applied.
     assert report.patch_operations_applied == []
-    # Deterministic baseline is PRESERVED (no blank telemetry) and the failed
-    # stage/role is recorded for the UI.
+    # Deterministic baseline is PRESERVED (no blank telemetry); both the Red Team
+    # failure and the aborting tuning stage are recorded for the UI.
     assert report.before_results, "deterministic baseline must be preserved"
-    assert report.metadata.failed_role == "red"
-    assert report.metadata.failed_stage == "red_team_generation"
+    assert report.metadata.red_team_status == "failed"
+    assert report.metadata.failed_role == "tuning"
+    assert report.metadata.failed_stage == "policy_tuning"
 
 
 def test_parse_and_validate_helpers_directly():

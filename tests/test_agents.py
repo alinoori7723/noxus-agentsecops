@@ -101,12 +101,15 @@ def test_semantic_judge_outputs_schema_valid_judgment():
     assert judgment.detection_mode is DetectionMode.semantic_llm
 
 
-def test_semantic_judge_failure_maps_to_human_review_required():
-    # Red team succeeds, but the semantic judge output is unrecoverable.
+def test_semantic_judge_failure_degrades_and_continues_to_tuning():
+    # Red team succeeds, but the semantic judge output is unrecoverable. The loop
+    # DEGRADES (drops the semantic supplement) and continues to tuning on the
+    # deterministic + valid red-team evidence — it does NOT abort.
     provider = FakeLLMProvider(
         red=m2_data.VALID_PROBE_BATCH,
         judge=m2_data.INVALID_JSON,
         repair=m2_data.INVALID_JSON,
+        tuning=m2_data.FULL_REMEDIATION_PATCHSET,
     )
     report = run_readiness_assessment(
         system_prompt=m2_data.SAMPLE_SYSTEM_PROMPT,
@@ -115,5 +118,15 @@ def test_semantic_judge_failure_maps_to_human_review_required():
         mode="agent_assisted",
         provider=provider,
     )
-    assert report.readiness_state is ReadinessState.HUMAN_REVIEW_REQUIRED
-    assert any("semantic_judge" in risk for risk in report.open_risks)
+    # Judge recorded as failed; loop continued (tuning ran, patches applied).
+    assert report.metadata.semantic_judge_status == "failed"
+    assert report.metadata.evidence_basis == "red_team_augmented"
+    assert report.metadata.tuning_iterations >= 1
+    assert report.patch_operations_applied
+    # Baseline preserved; no semantic finding fabricated despite the failure.
+    assert report.before_results
+    assert not any(
+        f.detection_mode is DetectionMode.semantic_llm
+        for r in report.after_results
+        for f in r.findings
+    )

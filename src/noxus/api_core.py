@@ -383,13 +383,30 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
         key = ROLE_MODEL_KEY[role]
         return (getattr(pc, key, None) if pc else None) or DEFAULT_MODELS[key]
 
+    meta = report.metadata
     patch_count = len(report.patch_operations_applied)
     before_probes = len(report.before_results)
+    baseline_finding_count = sum(len(r.findings) for r in report.before_results)
     semantic_source = _semantic_judgment_source(report)
     # A schema-contract abort (not just a high-severity finding) is the only case
     # where the agent pipeline itself failed and routed to human review.
     schema_failure = "schema_contract_failure" in list(report.human_review_requirements)
-    failed_role = getattr(report.metadata, "failed_role", None)
+    failed_role = getattr(meta, "failed_role", None)
+    # Red-Team resilience telemetry: the Red Team may have FAILED yet the loop
+    # CONTINUED on deterministic baseline evidence (a successful, honest run that
+    # is visually distinct from a clean Red Team success).
+    red_team_status = getattr(meta, "red_team_status", None)
+    continued_after_red = bool(getattr(meta, "continued_after_red_failure", False))
+    fallback_used = getattr(meta, "fallback_used", None)
+    fallback_reason = getattr(meta, "fallback_reason", None)
+    red_failed = is_agent and (
+        red_team_status == "failed" or (schema_failure and failed_role == "red")
+    )
+    # Semantic-Judge resilience telemetry: the judge may have FAILED its schema
+    # contract yet the loop CONTINUED on deterministic + valid red-team evidence.
+    semantic_judge_status = getattr(meta, "semantic_judge_status", None)
+    judge_degraded = is_agent and not red_failed and semantic_judge_status == "failed"
+    evidence_basis = getattr(meta, "evidence_basis", None)
     # Role pipeline order: red -> judge -> tuning. On a schema failure, the failing
     # role is "failed", earlier roles "used" (they completed), later roles "not_used".
     _ROLE_ORDER = {"red": 0, "judge": 1, "tuning": 2}
@@ -410,12 +427,90 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
                 "status": "used" if default_used else "not_used",
                 "summary": used_summary if default_used else default_not_used_summary}
 
-    # Red Team
-    if is_agent:
+    if red_failed:
+        # Red Team failed its schema contract. Honest, distinct presentation:
+        # never shown as a clean success and never as a fabricated probe run.
+        red = {
+            "source": "llm",
+            "status": "failed",
+            "summary": (
+                "Generated probes failed schema validation — continued using "
+                "deterministic baseline evidence."
+                if continued_after_red
+                else "Generated probes failed schema validation — no "
+                "deterministic baseline findings to fall back to."
+            ),
+        }
+        if continued_after_red:
+            # Loop degraded to the deterministic baseline; the judge is skipped
+            # and tuning still runs from deterministic baseline findings.
+            judge = {
+                "source": "llm",
+                "status": "skipped",
+                "summary": (
+                    "Skipped — ran on deterministic baseline evidence after the "
+                    "Red Team Agent failed."
+                ),
+            }
+            if schema_failure and failed_role == "tuning":
+                tuning = {
+                    "source": "llm",
+                    "status": "failed",
+                    "summary": "Proposed a patch that failed schema validation.",
+                }
+            elif patch_count > 0:
+                tuning = {
+                    "source": "llm",
+                    "status": "used",
+                    "summary": (
+                        f"Proposed a schema-bound PatchSet ({patch_count} "
+                        "operations) from deterministic baseline findings."
+                    ),
+                }
+            else:
+                tuning = {"source": "llm", "status": "not_used",
+                          "summary": "Proposed no patches."}
+        else:
+            judge = {
+                "source": "llm", "status": "not_used",
+                "summary": "Not reached — the Red Team Agent failed and no "
+                "deterministic baseline fallback was available.",
+            }
+            tuning = {
+                "source": "llm", "status": "not_used",
+                "summary": "Not reached — the Red Team Agent failed and no "
+                "deterministic baseline fallback was available.",
+            }
+    elif is_agent:
+        # Red Team
         red = _agent_status(
             "red", True,
             "Red team did not run.",
             "Generated structured probes on top of the deterministic baseline.",
+        )
+        # Semantic Judge — honest "failed" when it broke its contract but the
+        # loop degraded and continued on deterministic + valid red-team evidence.
+        if judge_degraded:
+            judge = {
+                "source": "llm",
+                "status": "failed",
+                "summary": (
+                    "Evaluated semantic violations — failed schema validation; "
+                    "continued on deterministic evidence (no semantic findings "
+                    "fabricated)."
+                ),
+            }
+        else:
+            judge = _agent_status(
+                "judge", semantic_source == "llm",
+                "Ran, but added no semantic findings beyond deterministic checks.",
+                "Evaluated semantic violations and added judged findings.",
+            )
+        # Policy Tuning (proposes the patch set)
+        tuning = _agent_status(
+            "tuning", patch_count > 0,
+            "Proposed no patches.",
+            f"Proposed a schema-bound PatchSet ({patch_count} operations).",
         )
     else:
         red = {
@@ -423,26 +518,8 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
             "status": "used",
             "summary": f"Ran {before_probes} deterministic baseline probes.",
         }
-
-    # Semantic Judge
-    if is_agent:
-        judge = _agent_status(
-            "judge", semantic_source == "llm",
-            "Ran, but added no semantic findings beyond deterministic checks.",
-            "Evaluated semantic violations and added judged findings.",
-        )
-    else:
         judge = {"source": "deterministic", "status": "not_used",
                  "summary": "Semantic judge is not used in deterministic mode."}
-
-    # Policy Tuning (proposes the patch set)
-    if is_agent:
-        tuning = _agent_status(
-            "tuning", patch_count > 0,
-            "Proposed no patches.",
-            f"Proposed a schema-bound PatchSet ({patch_count} operations).",
-        )
-    else:
         tuning = {"source": "deterministic_mapper",
                   "status": "used" if patch_count else "not_used",
                   "summary": f"Patches mapped deterministically from findings ({patch_count})."}
@@ -467,6 +544,17 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
         "tuning_model": _model("tuning"),
         "semantic_judgment_source": semantic_source,
         "patch_proposal_source": "llm" if is_agent else "deterministic_mapper",
+        # Red-Team resilience trace (presentation-only). Lets the UI explain a
+        # degraded-but-honest run distinct from a clean Red Team success.
+        "fallback_used": fallback_used if red_failed else None,
+        "fallback_reason": fallback_reason if red_failed else None,
+        "continued_after_red_failure": continued_after_red,
+        "baseline_probe_count": before_probes,
+        "baseline_finding_count": baseline_finding_count,
+        # Which evidence base the before/after metrics were computed over, and the
+        # semantic-judge resilience status (so a degraded run is never silent).
+        "evidence_basis": evidence_basis,
+        "semantic_judge_status": semantic_judge_status,
         "stages": stages,
     }
 
@@ -482,9 +570,9 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
     effective_mode = mode or getattr(report.metadata, "mode", "deterministic")
     trace = build_agent_trace(report, effective_mode, provider_config)
     meta = report.metadata
+    baseline_findings = sum(len(r.findings) for r in report.before_results)
     schema_failure = None
     if "schema_contract_failure" in list(report.human_review_requirements):
-        baseline_findings = sum(len(r.findings) for r in report.before_results)
         schema_failure = {
             "failed_stage": getattr(meta, "failed_stage", None),
             "failed_role": getattr(meta, "failed_role", None),
@@ -494,6 +582,45 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
             "baseline_probe_count": len(report.before_results),
             "baseline_finding_count": baseline_findings,
             "reason": "schema contract failure",
+        }
+    # Red-Team diagnostics: present whenever the Red Team Agent failed its schema
+    # contract — for BOTH a degraded-but-continued run (CONDITIONAL_PASS/PASS via
+    # the deterministic baseline fallback) AND an abort. Honest, never hidden.
+    red_team_failure = None
+    if getattr(meta, "red_team_status", None) == "failed":
+        red_team_failure = {
+            "failed": True,
+            "failed_stage": "red_team",
+            "failed_role": "red",
+            "source": "llm",
+            "fallback_used": getattr(meta, "fallback_used", None),
+            "fallback_reason": getattr(meta, "fallback_reason", None),
+            "continued_after_red_failure": bool(
+                getattr(meta, "continued_after_red_failure", False)
+            ),
+            "baseline_preserved": bool(report.before_results),
+            "baseline_probe_count": len(report.before_results),
+            "baseline_finding_count": baseline_findings,
+            # Sanitized (<=500 chars, secrets redacted) by json_contracts.
+            "debug_excerpt": getattr(meta, "red_team_failure_excerpt", None),
+        }
+    # Semantic-Judge diagnostics: present when the judge broke its schema contract
+    # but the loop DEGRADED and continued on deterministic + valid red-team
+    # evidence (no semantic findings fabricated). Symmetric with red_team_failure.
+    semantic_judge_failure = None
+    if getattr(meta, "semantic_judge_status", None) == "failed":
+        semantic_judge_failure = {
+            "failed": True,
+            "failed_stage": "semantic_judge",
+            "failed_role": "judge",
+            "source": "llm",
+            "fallback_basis": getattr(meta, "evidence_basis", None),
+            "continued": True,
+            "baseline_preserved": bool(report.before_results),
+            "baseline_probe_count": len(report.before_results),
+            "baseline_finding_count": baseline_findings,
+            # Sanitized (<=500 chars, secrets redacted) by json_contracts.
+            "debug_excerpt": getattr(meta, "semantic_judge_failure_excerpt", None),
         }
     return {
         "readiness": ui_formatters.build_readiness_summary_model(report),
@@ -505,10 +632,13 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "execution_mode": trace["execution_mode"],
         "provider_type": trace["provider_type"],
         "schema_failure": schema_failure,
+        "red_team_failure": red_team_failure,
+        "semantic_judge_failure": semantic_judge_failure,
         "metadata": {
             "mode": effective_mode,
             "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
             "max_tuning_iterations": MAX_TUNING_ITERATIONS,
+            "evidence_basis": getattr(report.metadata, "evidence_basis", None),
         },
         # Raw report (no API key) so the client can request a local audit export
         # without the server holding any per-session state.

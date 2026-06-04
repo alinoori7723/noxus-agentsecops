@@ -385,3 +385,145 @@ describe("Provider diagnostics role-vs-generic distinction", () => {
     expect(screen.getAllByText(/schema contract ok/i).length).toBe(3);
   });
 });
+
+import { RedTeamFallbackNotice } from "../components/RedTeamFallbackNotice";
+import { AuditTimeline } from "../components/AuditTimeline";
+import {
+  agentTraceRedFallbackContinued,
+  redTeamFailureContinued,
+  redBlueNoPatch,
+  baselineTimeline,
+} from "./fixtures";
+
+describe("RedTeamFallbackNotice (Red failed, continued on baseline)", () => {
+  it("shows the fallback message and that baseline evidence was used", () => {
+    render(<RedTeamFallbackNotice failure={redTeamFailureContinued} />);
+    expect(
+      screen.getByText(
+        /Red Team Agent failed schema validation\. Noxus continued using deterministic baseline evidence/i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/FALLBACK USED/)).toBeInTheDocument();
+    expect(screen.getByText(/5 probes, 6 findings/)).toBeInTheDocument();
+    // Distinct from a clean success: it is not labeled HUMAN_REVIEW_REQUIRED.
+    expect(screen.queryByText(/HUMAN_REVIEW_REQUIRED/)).not.toBeInTheDocument();
+  });
+
+  it("keeps the sanitized excerpt collapsed and free of API keys", () => {
+    const withFakeKey = {
+      ...redTeamFailureContinued,
+      debug_excerpt: "garbage Bearer ***REDACTED*** tail",
+    };
+    render(<RedTeamFallbackNotice failure={withFakeKey} />);
+    expect(screen.queryByText(/garbage Bearer/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText(/Red Team schema failure details/i));
+    expect(
+      screen.getByText(/garbage Bearer \*\*\*REDACTED\*\*\* tail/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/sk-[A-Za-z0-9]/)).not.toBeInTheDocument();
+  });
+});
+
+describe("RoleObservability after Red failure + fallback", () => {
+  it("shows Red failed, judge skipped, tuning used, and the fallback note", () => {
+    render(
+      <RoleObservability
+        trace={agentTraceRedFallbackContinued}
+        evidence={evidenceWithProprietaryRisk}
+      />,
+    );
+    expect(screen.getByText("Red Team Agent")).toBeInTheDocument();
+    expect(screen.getAllByText(/failed/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/skipped/i).length).toBeGreaterThan(0);
+    // Tuning Agent is shown as used because the loop continued.
+    expect(screen.getAllByText(/^used$/i).length).toBeGreaterThan(0);
+    // The fallback message explains the deterministic-baseline continuation.
+    expect(
+      screen.getAllByText(/continued using\s+deterministic baseline evidence/i)
+        .length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("AuditTimeline (baseline preserved)", () => {
+  it("is not blank when the deterministic baseline exists", () => {
+    render(<AuditTimeline steps={baselineTimeline} />);
+    expect(screen.getByText("Baseline probes")).toBeInTheDocument();
+    // Real evidence counts are rendered (not a blank/zeroed timeline).
+    expect(screen.getAllByText("6").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/evidence items/i).length).toBe(
+      baselineTimeline.length,
+    );
+  });
+});
+
+describe("RedBlueDashboard safety-rail honesty", () => {
+  it("shows no fake safety rail preview when no patch was applied", () => {
+    render(<RedBlueDashboard model={redBlueNoPatch} />);
+    expect(
+      screen.getByText(/No safety rail preview available from report data/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/real telemetry/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/<critical safety rail clause>/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the safety rail preview only when real patch telemetry exists", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.getByText(/real telemetry/i)).toBeInTheDocument();
+    expect(screen.getByText(/untrusted data/i)).toBeInTheDocument();
+  });
+});
+
+import {
+  agentTraceJudgeDegraded,
+} from "./fixtures";
+
+describe("Evidence basis (degraded/fallback clarity)", () => {
+  it("ui_shows_evidence_basis_for_fallback_run", () => {
+    render(
+      <RoleObservability
+        trace={agentTraceRedFallbackContinued}
+        evidence={evidenceWithProprietaryRisk}
+      />,
+    );
+    expect(
+      screen.getByText(/Evidence basis: deterministic baseline fallback/i),
+    ).toBeInTheDocument();
+  });
+
+  it("normal_agent_run_does_not_show_fallback_basis", () => {
+    render(
+      <RoleObservability trace={agentTrace} evidence={evidenceWithProprietaryRisk} />,
+    );
+    expect(
+      screen.getByText(/Evidence basis: red-team augmented/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/deterministic baseline fallback/i),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/failed schema validation/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Semantic Judge failed + degraded note when the judge degraded", () => {
+    render(
+      <RoleObservability
+        trace={agentTraceJudgeDegraded}
+        evidence={evidenceWithProprietaryRisk}
+      />,
+    );
+    // Judge is shown failed; the loop continued on deterministic evidence.
+    expect(screen.getAllByText(/failed/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Semantic Judge failed schema validation/i),
+    ).toBeInTheDocument();
+    // Tuning is still shown as used (the loop continued).
+    expect(screen.getAllByText(/^used$/i).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText(/Evidence basis: red-team augmented/i),
+    ).toBeInTheDocument();
+  });
+});

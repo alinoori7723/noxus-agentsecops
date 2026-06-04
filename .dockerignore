@@ -2,9 +2,11 @@
 .git/
 .gitignore
 
-# Virtual environments
+# Virtual environments (incl. transient validation venvs like .venv-final-polish)
 .venv/
+.venv*/
 venv/
+*venv*/
 
 # Python caches / build artifacts
 __pycache__/
@@ -30,10 +32,16 @@ tests/
 # Frontend deps / build artifacts (rebuilt inside the Docker build stage)
 node_modules/
 **/node_modules/
+apps/web/node_modules/
+dist/
 apps/web/dist/
 
 # Claude harness / session settings
 .claude/
+
+# Screenshots / scratch captures
+screenshots/
+**/screenshots/
 
 # Local environment files
 .env

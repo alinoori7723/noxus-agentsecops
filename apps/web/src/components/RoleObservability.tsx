@@ -13,6 +13,7 @@ const STATUS_COLOR: Record<StageStatus, ChipColor> = {
   used: "green",
   not_used: "neutral",
   failed: "red",
+  skipped: "amber",
   human_review_required: "amber",
 };
 
@@ -20,7 +21,14 @@ const STATUS_LABEL: Record<StageStatus, string> = {
   used: "used",
   not_used: "not used",
   failed: "failed",
+  skipped: "skipped",
   human_review_required: "human review",
+};
+
+const EVIDENCE_BASIS_LABEL: Record<string, string> = {
+  deterministic_baseline: "deterministic baseline",
+  red_team_augmented: "red-team augmented",
+  degraded_fallback: "deterministic baseline fallback",
 };
 
 const STAGE_META: Record<
@@ -160,14 +168,47 @@ export function RoleObservability({
         right={
           <StatusChip
             label={
-              trace.execution_mode === "agent_assisted"
-                ? "agent-assisted"
-                : "deterministic"
+              trace.continued_after_red_failure
+                ? "agent-assisted (degraded)"
+                : trace.execution_mode === "agent_assisted"
+                  ? "agent-assisted"
+                  : "deterministic"
             }
-            color={trace.execution_mode === "agent_assisted" ? "blue" : "neutral"}
+            color={
+              trace.continued_after_red_failure
+                ? "amber"
+                : trace.execution_mode === "agent_assisted"
+                  ? "blue"
+                  : "neutral"
+            }
           />
         }
       />
+      {trace.continued_after_red_failure && (
+        <p
+          className="mb-3 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-[12px] font-medium text-amber-800"
+          role="status"
+        >
+          Red Team Agent failed schema validation. Noxus continued using
+          deterministic baseline evidence ({trace.baseline_probe_count} probes,{" "}
+          {trace.baseline_finding_count} findings).
+        </p>
+      )}
+      {trace.semantic_judge_status === "failed" &&
+        !trace.continued_after_red_failure && (
+          <p
+            className="mb-3 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2 text-[12px] font-medium text-amber-800"
+            role="status"
+          >
+            Semantic Judge failed schema validation. Noxus continued on
+            deterministic evidence (no semantic findings were fabricated).
+          </p>
+        )}
+      {trace.execution_mode === "agent_assisted" && trace.evidence_basis && (
+        <p className="mb-3 text-[12px] font-semibold text-slate-600">
+          Evidence basis: {EVIDENCE_BASIS_LABEL[trace.evidence_basis]}
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {stages.map((s) => (
           <RoleCard key={s.stage} stage={s} judgeConfidence={judgeConfidence} />

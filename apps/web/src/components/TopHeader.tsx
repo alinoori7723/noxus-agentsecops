@@ -19,7 +19,7 @@ function Chip({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 }
 
 export function TopHeader({ title, subtitle, proof, online }: TopHeaderProps) {
-  const pyTests = proof?.test_count ?? 201;
+  const pyTests = proof?.test_count ?? 351;
   const maxIter = proof?.max_tuning_iterations ?? 2;
   return (
     <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/90 backdrop-blur">
@@ -42,7 +42,7 @@ export function TopHeader({ title, subtitle, proof, online }: TopHeaderProps) {
             Local Demo
           </span>
           <Chip icon={<FlaskConical size={13} />}>{pyTests} Python tests</Chip>
-          <Chip icon={<Beaker size={13} />}>27 frontend tests</Chip>
+          <Chip icon={<Beaker size={13} />}>36 frontend tests</Chip>
           <Chip icon={<Layers size={13} />}>MAX_TUNING_ITERATIONS = {maxIter}</Chip>
           <Chip icon={<Container size={13} />}>Docker-ready</Chip>
         </div>

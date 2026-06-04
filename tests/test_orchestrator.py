@@ -65,13 +65,29 @@ def test_agent_assisted_mode_enforces_max_tuning_iterations():
     assert report.metadata.tuning_iterations == MAX_TUNING_ITERATIONS
 
 
-def test_agent_schema_failure_returns_human_review_required():
-    provider = FakeLLMProvider(red=m2_data.INVALID_JSON, repair=m2_data.INVALID_JSON)
+def test_red_failure_degrades_to_deterministic_baseline_fallback():
+    # A Red Team schema failure no longer aborts the loop when the deterministic
+    # baseline produced findings: it DEGRADES to the deterministic baseline as
+    # the fallback evidence source and the tuning agent still runs from it.
+    provider = FakeLLMProvider(
+        red=m2_data.INVALID_JSON,
+        repair=m2_data.INVALID_JSON,
+        tuning=m2_data.FULL_REMEDIATION_PATCHSET,
+    )
     report = _agent_assisted(provider)
-    assert report.readiness_state is ReadinessState.HUMAN_REVIEW_REQUIRED
-    # No dirty continuation with partial state.
-    assert report.after_results == []
-    assert report.patch_operations_applied == []
+    assert report.metadata.red_team_status == "failed"
+    assert report.metadata.fallback_used == "deterministic_baseline"
+    assert report.metadata.fallback_reason == "red_team_schema_contract_failure"
+    assert report.metadata.continued_after_red_failure is True
+    # Tuning ran from the deterministic baseline and the engine applied patches.
+    assert report.metadata.tuning_iterations >= 1
+    assert report.patch_operations_applied
+    # Honest final state from the actual retest (proprietary risk remains).
+    assert report.readiness_state is ReadinessState.CONDITIONAL_PASS
+    assert any("proprietary_context_exposure" in risk for risk in report.open_risks)
+    # Never fabricates Red Team probes: only deterministic baseline probes ran.
+    baseline_ids = {p.probe_id for p in get_probes()}
+    assert set(report.probes_run) == baseline_ids
 
 
 def test_agent_assisted_mode_does_not_fake_proprietary_context_pass():
@@ -93,10 +109,38 @@ def test_agent_assisted_mode_does_not_fake_proprietary_context_pass():
     assert report.readiness_state is not ReadinessState.PASS
 
 
-def test_orchestrator_aborts_further_llm_execution_after_schema_contract_error():
-    provider = FakeLLMProvider(red=m2_data.INVALID_JSON, repair=m2_data.INVALID_JSON)
+def test_red_failure_skips_judge_but_still_runs_tuning_from_baseline():
+    # After a Red Team failure with a deterministic-baseline fallback, the
+    # semantic judge is SKIPPED (deterministic findings are the fallback
+    # evidence), but the policy tuning agent IS still invoked from those findings.
+    provider = FakeLLMProvider(
+        red=m2_data.INVALID_JSON,
+        repair=m2_data.INVALID_JSON,
+        tuning=m2_data.FULL_REMEDIATION_PATCHSET,
+    )
+    report = _agent_assisted(provider)
+    assert report.metadata.continued_after_red_failure is True
+    # The judge was never called; the tuning agent was.
+    assert all("[NOXUS_JUDGE]" not in c["system_prompt"] for c in provider.calls)
+    assert any("[NOXUS_TUNING]" in c["system_prompt"] for c in provider.calls)
+
+
+def test_red_and_tuning_failure_human_review_preserves_baseline():
+    # Outcome C: Red Team fails, the deterministic baseline fallback is used, but
+    # the tuning agent ALSO fails -> HUMAN_REVIEW_REQUIRED with baseline + BOTH
+    # failed stages recorded and no fake patch applied.
+    provider = FakeLLMProvider(
+        red=m2_data.INVALID_JSON,
+        tuning=m2_data.INVALID_JSON,
+        repair=m2_data.INVALID_JSON,
+    )
     report = _agent_assisted(provider)
     assert report.readiness_state is ReadinessState.HUMAN_REVIEW_REQUIRED
-    # The judge and tuning agents must never have been called.
-    assert all("[NOXUS_JUDGE]" not in c["system_prompt"] for c in provider.calls)
-    assert all("[NOXUS_TUNING]" not in c["system_prompt"] for c in provider.calls)
+    assert report.human_review_requirements == ["schema_contract_failure"]
+    assert report.patch_operations_applied == []
+    assert report.before_results, "deterministic baseline must be preserved"
+    # Red failed first (recorded), tuning is the aborting stage.
+    assert report.metadata.red_team_status == "failed"
+    assert report.metadata.continued_after_red_failure is True
+    assert report.metadata.failed_stage == "policy_tuning"
+    assert report.metadata.failed_role == "tuning"

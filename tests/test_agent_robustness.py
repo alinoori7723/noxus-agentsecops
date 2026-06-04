@@ -99,6 +99,62 @@ def test_semantic_judge_normalizes_confidence_when_unambiguous():
     assert out["detection_mode"] == "semantic_llm"
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        (1.0, "high"),
+        (0.9, "high"),
+        (0.67, "high"),
+        (0.5, "medium"),
+        (0.34, "medium"),
+        (0.1, "low"),
+        (0, "low"),
+        ("1.0", "high"),
+        ("0.2", "low"),
+        ("0", "low"),
+    ],
+)
+def test_semantic_judge_normalizes_numeric_confidence(raw, expected):
+    # An IN-RANGE [0,1] probability (or numeric string) is coerced to the nearest
+    # strict Confidence bucket. The schema stays strict; nothing is invented.
+    out = normalize_semantic_judgment({"confidence": raw})
+    assert out["confidence"] == expected
+
+
+@pytest.mark.parametrize("raw", [-0.1, 1.5, 90, 50, "90%", "1.5", "-0.2", "abc"])
+def test_semantic_judge_rejects_out_of_range_confidence_at_boundary(raw):
+    # Out-of-range / non-[0,1] / arbitrary values fail FAST at the normalizer
+    # boundary (no percentage guessing, no invention, never flow deeper).
+    from noxus.errors import SchemaContractError
+
+    with pytest.raises(SchemaContractError):
+        normalize_semantic_judgment({"confidence": raw})
+
+
+def test_semantic_judge_numeric_confidence_validates_end_to_end():
+    # A judge response with a float confidence flows through to a valid
+    # SemanticJudgment (no SchemaContractError, no loosened schema).
+    import json as _json
+
+    from noxus.probe_registry import get_probes
+
+    raw = _json.dumps(
+        {
+            "probe_id": "p",
+            "semantic_violation": True,
+            "confidence": 1.0,
+            "reason": "followed embedded instructions",
+            "suggested_finding_type": "indirect_prompt_injection_semantic",
+            "detection_mode": "semantic_llm",
+        }
+    )
+    judgment = SemanticJudgeAgent(FakeLLMProvider(judge=raw), "m").judge(
+        get_probes()[0], "resp", [], POLICY, "sys"
+    )
+    assert judgment.confidence.value == "high"
+    assert judgment.semantic_violation is True
+
+
 # --------------------------------------------------------------------------- #
 # Agents accept recoverable drift; reject unsafe outputs
 # --------------------------------------------------------------------------- #
@@ -129,6 +185,30 @@ def test_policy_tuning_accepts_patch_operations_alias_end_to_end():
         [], POLICY, "sys"
     )
     assert any(op.mask_type == "email" for op in ps.operations)
+
+
+def test_tuning_prompt_documents_exact_patch_fields():
+    # The tuning prompt must show the real per-operation field contract and warn
+    # against the plausible-but-invalid vocabularies real models drift into.
+    prompt = PolicyTuningAgent(FakeLLMProvider(), "m").build_user_prompt(
+        [], POLICY, "sys", ["add_mask_type"]
+    )
+    assert '"operation":"add_mask_type"' in prompt
+    assert '"target":"policy"' in prompt
+    assert "prompt_injection.detect_indirect_instructions" in prompt
+    for invented in ("'op'", "'control'", "'level'", "'data_type'"):
+        assert invented in prompt  # explicitly named as forbidden
+    assert "```" not in prompt
+
+
+def test_judge_prompt_requires_string_confidence_enum():
+    prompt = SemanticJudgeAgent(FakeLLMProvider(), "m").build_user_prompt(
+        get_probes()[0], "resp", [], POLICY, "sys"
+    )
+    assert "confidence" in prompt
+    assert '"low"' in prompt and '"medium"' in prompt and '"high"' in prompt
+    assert "NOT a number" in prompt
+    assert "```" not in prompt
 
 
 def test_policy_tuning_rejects_unknown_patch_operation():
@@ -295,10 +375,16 @@ def test_deterministic_baseline_preserved_after_invalid_patch_path_failure():
 
 
 # --------------------------------------------------------------------------- #
-# Orchestration: baseline preserved on schema failure
+# Orchestration: Red Team failure degrades to the deterministic baseline (and
+# the loop continues) instead of aborting, when baseline findings exist.
 # --------------------------------------------------------------------------- #
 def _failed_red_report():
-    provider = FakeLLMProvider(red="garbage not json", repair="still garbage")
+    # Red Team garbage -> fallback to deterministic baseline; tuning succeeds.
+    provider = FakeLLMProvider(
+        red="garbage not json",
+        repair="still garbage",
+        tuning=m2_data.FULL_REMEDIATION_PATCHSET,
+    )
     return run_readiness_assessment(
         system_prompt=m2_data.SAMPLE_SYSTEM_PROMPT,
         policy=m2_data.SAMPLE_POLICY,
@@ -308,27 +394,31 @@ def _failed_red_report():
     )
 
 
-def test_agent_assisted_schema_failure_preserves_deterministic_baseline():
+def test_agent_assisted_red_failure_preserves_deterministic_baseline_and_continues():
     report = _failed_red_report()
-    assert report.readiness_state is ReadinessState.HUMAN_REVIEW_REQUIRED
     assert report.before_results, "baseline probes must be preserved"
     assert sum(len(r.findings) for r in report.before_results) > 0
-    assert report.metadata.failed_role == "red"
-    assert report.metadata.failed_stage == "red_team_generation"
+    assert report.metadata.red_team_status == "failed"
+    assert report.metadata.fallback_used == "deterministic_baseline"
+    assert report.metadata.continued_after_red_failure is True
+    # The loop continued: tuning ran and the engine applied real patches.
+    assert report.metadata.tuning_iterations >= 1
+    assert report.patch_operations_applied
 
 
-def test_agent_assisted_schema_failure_applies_no_fake_patch():
+def test_agent_assisted_red_failure_fabricates_no_red_probes():
     report = _failed_red_report()
-    assert report.patch_operations_applied == []
-    assert report.metadata.tuning_iterations == 0
+    baseline_ids = {p.probe_id for p in get_probes()}
+    assert set(report.probes_run) == baseline_ids
+    assert not any(pid.startswith("agent_") for pid in report.probes_run)
 
 
-def test_agent_assisted_schema_failure_keeps_proprietary_open_risk():
+def test_agent_assisted_red_failure_keeps_proprietary_open_risk():
     report = _failed_red_report()
     assert any("proprietary_context_exposure" in r for r in report.open_risks)
 
 
-def test_agent_assisted_failure_response_is_not_blank_and_shows_failed_stage():
+def test_agent_assisted_red_failure_response_shows_fallback_not_blank():
     report = _failed_red_report()
     sentinel = "sk-NO-LEAK-SENTINEL-9z9z"
     cfg = api_core.ProviderConfig(
@@ -341,11 +431,19 @@ def test_agent_assisted_failure_response_is_not_blank_and_shows_failed_stage():
     # Not a blank timeline — deterministic baseline evidence is present.
     assert resp["timeline"][0]["evidence_count"] > 0
     assert resp["red_blue"]["red"]["baseline_probes"]
-    # The failed stage is visible in the trace and the schema_failure object.
+    # Honest, distinct degraded trace: red failed, judge skipped, tuning used.
     stages = {s["stage"]: s["status"] for s in resp["agent_trace"]["stages"]}
     assert stages["red_team"] == "failed"
-    assert stages["semantic_judge"] == "not_used"
-    assert resp["schema_failure"]["failed_role"] == "red"
-    assert resp["schema_failure"]["baseline_preserved"] is True
-    assert resp["metadata"]["tuning_iterations"] == 0
+    assert stages["semantic_judge"] == "skipped"
+    assert stages["policy_tuning"] == "used"
+    # The Red-Team failure diagnostics object is present (not schema_failure,
+    # since the run continued and did not route to HUMAN_REVIEW_REQUIRED).
+    assert resp["schema_failure"] is None
+    rtf = resp["red_team_failure"]
+    assert rtf["failed_role"] == "red"
+    assert rtf["failed_stage"] == "red_team"
+    assert rtf["fallback_used"] == "deterministic_baseline"
+    assert rtf["continued_after_red_failure"] is True
+    assert rtf["baseline_preserved"] is True
+    assert resp["agent_trace"]["fallback_used"] == "deterministic_baseline"
     assert sentinel not in json.dumps(resp)

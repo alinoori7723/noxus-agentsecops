@@ -4,6 +4,7 @@ import type {
   ProviderTestResponse,
   ReadinessSummary,
   RedBlueModel,
+  RedTeamFailure,
   SchemaFailure,
 } from "../types/noxus";
 
@@ -17,12 +18,58 @@ export const agentTracePartialFailure: AgentTrace = {
   tuning_model: "gemini-3.1-pro-preview",
   semantic_judgment_source: "deterministic",
   patch_proposal_source: "llm",
+  fallback_used: null,
+  fallback_reason: "red_team_schema_contract_failure",
+  continued_after_red_failure: false,
+  baseline_probe_count: 5,
+  baseline_finding_count: 6,
+  evidence_basis: "deterministic_baseline",
+  semantic_judge_status: null,
   stages: [
     { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Generated structured probes — failed schema validation." },
     { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "not_used", summary: "Not reached — an earlier agent stage failed." },
     { stage: "policy_tuning", role: "tuning", model: "gemini-3.1-pro-preview", provider_type: "gemini_native", source: "llm", status: "not_used", summary: "Not reached — an earlier agent stage failed." },
     { stage: "patch_application", role: null, model: null, provider_type: null, source: "deterministic_engine", status: "not_used", summary: "Deterministic engine applied 0 allowed patch operations." },
   ],
+};
+
+// Agent-assisted run where the Red Team Agent failed schema validation BUT the
+// loop continued on the deterministic baseline (degraded-but-honest success).
+export const agentTraceRedFallbackContinued: AgentTrace = {
+  execution_mode: "agent_assisted",
+  provider_type: "gemini_native",
+  red_model: "gemini-3.5-flash",
+  judge_model: "gemini-3.5-flash",
+  tuning_model: "gemini-3.1-pro-preview",
+  semantic_judgment_source: "deterministic",
+  patch_proposal_source: "llm",
+  fallback_used: "deterministic_baseline",
+  fallback_reason: "red_team_schema_contract_failure",
+  continued_after_red_failure: true,
+  baseline_probe_count: 5,
+  baseline_finding_count: 6,
+  evidence_basis: "degraded_fallback",
+  semantic_judge_status: "skipped",
+  stages: [
+    { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Generated probes failed schema validation — continued using deterministic baseline evidence." },
+    { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "skipped", summary: "Skipped — ran on deterministic baseline evidence after the Red Team Agent failed." },
+    { stage: "policy_tuning", role: "tuning", model: "gemini-3.1-pro-preview", provider_type: "gemini_native", source: "llm", status: "used", summary: "Proposed a schema-bound PatchSet (7 operations) from deterministic baseline findings." },
+    { stage: "patch_application", role: null, model: null, provider_type: null, source: "deterministic_engine", status: "used", summary: "Deterministic engine applied 7 allowed patch operations." },
+  ],
+};
+
+export const redTeamFailureContinued: RedTeamFailure = {
+  failed: true,
+  failed_stage: "red_team",
+  failed_role: "red",
+  source: "llm",
+  fallback_used: "deterministic_baseline",
+  fallback_reason: "red_team_schema_contract_failure",
+  continued_after_red_failure: true,
+  baseline_preserved: true,
+  baseline_probe_count: 5,
+  baseline_finding_count: 6,
+  debug_excerpt: "{ probes: [ ... not valid JSON ... ]",
 };
 
 export const schemaFailure: SchemaFailure = {
@@ -43,6 +90,13 @@ export const deterministicTrace: AgentTrace = {
   tuning_model: null,
   semantic_judgment_source: "deterministic",
   patch_proposal_source: "deterministic_mapper",
+  fallback_used: null,
+  fallback_reason: null,
+  continued_after_red_failure: false,
+  baseline_probe_count: 6,
+  baseline_finding_count: 6,
+  evidence_basis: "deterministic_baseline",
+  semantic_judge_status: null,
   stages: [
     {
       stage: "red_team",
@@ -91,6 +145,13 @@ export const agentTrace: AgentTrace = {
   tuning_model: "gemini-3.1-pro-preview",
   semantic_judgment_source: "llm",
   patch_proposal_source: "llm",
+  fallback_used: null,
+  fallback_reason: null,
+  continued_after_red_failure: false,
+  baseline_probe_count: 6,
+  baseline_finding_count: 6,
+  evidence_basis: "red_team_augmented",
+  semantic_judge_status: "used",
   stages: [
     {
       stage: "red_team",
@@ -128,6 +189,32 @@ export const agentTrace: AgentTrace = {
       status: "used",
       summary: "Deterministic engine applied 9 allowed patch operations.",
     },
+  ],
+};
+
+// Agent-assisted run where Red Team SUCCEEDED but the Semantic Judge failed its
+// schema contract; the loop degraded and continued on deterministic + valid
+// red-team evidence (no semantic findings fabricated).
+export const agentTraceJudgeDegraded: AgentTrace = {
+  execution_mode: "agent_assisted",
+  provider_type: "gemini_native",
+  red_model: "gemini-3.5-flash",
+  judge_model: "gemini-3.5-flash",
+  tuning_model: "gemini-3.1-pro-preview",
+  semantic_judgment_source: "deterministic",
+  patch_proposal_source: "llm",
+  fallback_used: null,
+  fallback_reason: null,
+  continued_after_red_failure: false,
+  baseline_probe_count: 9,
+  baseline_finding_count: 8,
+  evidence_basis: "red_team_augmented",
+  semantic_judge_status: "failed",
+  stages: [
+    { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "used", summary: "Generated structured probes on top of the deterministic baseline." },
+    { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Evaluated semantic violations — failed schema validation; continued on deterministic evidence (no semantic findings fabricated)." },
+    { stage: "policy_tuning", role: "tuning", model: "gemini-3.1-pro-preview", provider_type: "gemini_native", source: "llm", status: "used", summary: "Proposed a schema-bound PatchSet (9 operations)." },
+    { stage: "patch_application", role: null, model: null, provider_type: null, source: "deterministic_engine", status: "used", summary: "Deterministic engine applied 9 allowed patch operations." },
   ],
 };
 
@@ -270,3 +357,40 @@ export const redBlueWithRealRail: RedBlueModel = {
     ],
   },
 };
+
+// A partial run where NO patch was applied: the safety-rail preview must show
+// the honest "no preview" state, never a fabricated placeholder rail.
+export const redBlueNoPatch: RedBlueModel = {
+  red: {
+    title: "Red Team — probes & findings",
+    baseline_probes: redBlueWithRealRail.red.baseline_probes,
+    retest_probes: [],
+    probes: [],
+    findings: [],
+    failing_probes: [],
+    before_summary: { total_probes: 5, passed_probes: 0, failed_probes: 5, findings: 6 },
+    after_summary: { total_probes: 0, passed_probes: 0, failed_probes: 0, findings: 0 },
+  },
+  blue: {
+    title: "Blue Team — patches & safety rails",
+    patches: [],
+    patch_engine_note:
+      "Patches are applied only by the deterministic patch engine; agents propose, they never apply.",
+    safety_rail_preview: "No safety rail preview available from report data",
+    human_review_requirements: ["schema_contract_failure"],
+    open_risks: [
+      "probe_proprietary_context_exposure: must_not_appear_violation (medium)",
+    ],
+  },
+};
+
+// A timeline where the deterministic baseline ran (non-zero evidence), proving
+// the results view is never blank when the baseline is preserved.
+export const baselineTimeline: import("../types/noxus").TimelineStep[] = [
+  { step: 1, label: "Baseline probes", status: "Complete", status_color: "green", description: "5 probes ran against the original target.", evidence_count: 6, detail: "5 failing probes before patching." },
+  { step: 2, label: "Findings", status: "Needs patching", status_color: "red", description: "Evidence-backed findings captured before any patch.", evidence_count: 6, detail: "6 baseline findings in the report." },
+  { step: 3, label: "Structured patch proposal", status: "None", status_color: "green", description: "Patch operations are schema-bound report objects.", evidence_count: 0, detail: "0 patch operations emitted by the run." },
+  { step: 4, label: "Deterministic patch application", status: "No changes", status_color: "amber", description: "Only the deterministic patch engine applies changes.", evidence_count: 0, detail: "No safety rail preview available from report data." },
+  { step: 5, label: "Retest", status: "Complete", status_color: "green", description: "0 probes reran against the patched target.", evidence_count: 0, detail: "0 failing probes after retest." },
+  { step: 6, label: "Final readiness", status: "HUMAN_REVIEW_REQUIRED", status_color: "red", description: "HUMAN_REVIEW_REQUIRED — reviewer action required", evidence_count: 7, detail: "Open risks remain visible." },
+];

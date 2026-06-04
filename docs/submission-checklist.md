@@ -16,12 +16,12 @@ git tag --list
 
 ## Tests
 
-- [ ] Full suite green (expected: **201 passed** with dev extras installed).
-- [ ] Frontend tests green (27 Vitest tests).
+- [ ] Full suite green (release verification: **351 Python tests** with dev extras installed).
+- [ ] Frontend tests green (**36 frontend tests**).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # 201 passed (httpx from dev extras)
+.venv/bin/pytest -q          # release-verified at 351 Python tests (httpx from dev extras)
 cd apps/web && npm ci && npm run test && cd -
 ```
 
@@ -98,3 +98,23 @@ PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src
   not a runtime firewall, not compliance certification, no production traffic
   interception, no real cloud SDK, proprietary-context exposure intentionally
   remains an open risk.
+
+## Deferred after challenge MVP
+
+These are intentional, documented deferrals — not gaps to hide. The MVP
+deliberately prefers a fail-safe `HUMAN_REVIEW_REQUIRED` over over-coercing
+malformed LLM output:
+
+- **Per-probe Semantic Judge partial retention.** When the judge breaks its
+  schema contract the run drops the whole semantic supplement (keeping the
+  deterministic + valid red-team evidence) rather than retaining a subset of
+  per-probe judgments. Deferred to avoid half-state reports before a clearer
+  evidence-ledger design exists.
+- **Multi-attempt tuning self-correction (beyond the single bounded repair).**
+  A non-conforming patch vocabulary fails safe to `HUMAN_REVIEW_REQUIRED`.
+  Deferred because auto-coercing unknown patch fields risks inventing unsafe
+  target/path semantics — the deterministic patch engine must stay the only
+  applier, on an explicit allowlist.
+- **Dynamic CI-derived test-count publication.** The proof/docs counts are a
+  declared release-verification figure (`NOXUS_TEST_COUNT`), updated as a
+  metadata step — not a runtime/dynamic count.

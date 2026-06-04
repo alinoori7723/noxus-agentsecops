@@ -59,11 +59,16 @@ def test_docs_reference_core_api_endpoints():
 def test_docs_test_count_matches_declared_count():
     count = _declared_test_count()
     readme = README.read_text(encoding="utf-8")
-    assert f"{count} passing tests" in readme, (
+    # Release-verification wording (single declared count, not "live test count").
+    assert f"{count} Python tests" in readme, (
         f"README test-count claim must match NOXUS_TEST_COUNT={count}"
     )
     # Stale counts must not be claimed anywhere in the docs.
-    stale = ("89 passing", "89 automated", "114 passing", "114 automated", "89 passed")
+    stale = (
+        "89 passing", "89 automated", "114 passing", "114 automated", "89 passed",
+        "201 passing", "201 automated", "201 passed", "201 Python", "201 tests",
+        "27 Vitest", "27 frontend",
+    )
     for path in DOC_FILES:
         text = path.read_text(encoding="utf-8")
         for s in stale:
