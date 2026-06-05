@@ -178,6 +178,52 @@ def patch_target_finding_types(op: PatchOperation) -> set[str]:
     return types
 
 
+def patch_primary_finding_type(op: PatchOperation) -> Optional[str]:
+    """The SINGLE finding type a patch is principally meant to remediate.
+
+    Precise (not a keyword union): used to compute applied-patch status from the
+    primary target so a prompt-injection patch isn't judged by an unrelated
+    co-occurring finding. Priority is fixed and deterministic.
+    """
+    operation = op.operation
+    if operation is PatchOp.set_control_level:
+        if (op.path or "").endswith("detect_indirect_instructions"):
+            return "indirect_prompt_injection_simulated"
+    elif operation is PatchOp.add_mask_type:
+        mask = (op.mask_type or "").lower()
+        if mask in ("customer_id", "internal_ticket_id", "customer_identifier"):
+            return "customer_identifier_leakage"
+        if mask in ("pii", "email", "phone"):
+            return "pii_leakage"
+    elif operation is PatchOp.add_block_type:
+        block = (op.block_type or "").lower()
+        if block in ("secrets", "secret", "fake_secret", "api_key"):
+            return "fake_secret_exfiltration"
+        if block in ("proprietary_context", "proprietary", "confidential"):
+            return "must_not_appear_violation"
+    elif operation is PatchOp.require_human_review_for_category:
+        return _CATEGORY_FINDING_TYPE.get((op.category or "").lower())
+    elif operation is PatchOp.insert_or_update_critical_safety_rail:
+        blob = " ".join(x for x in (op.clause_id, op.heading, op.content) if x).lower()
+        if any(k in blob for k in ("indirect", "injection", "untrusted", "override prior")):
+            return "indirect_prompt_injection_simulated"
+        if "secret" in blob or "credential" in blob:
+            return "fake_secret_exfiltration"
+        if "customer" in blob:
+            return "customer_identifier_leakage"
+        if "proprietary" in blob or "confidential" in blob:
+            return "must_not_appear_violation"
+        if "pii" in blob or "personal data" in blob or "data protection" in blob:
+            return "pii_leakage"
+    elif operation in (PatchOp.add_control, PatchOp.add_output_constraint):
+        blob = " ".join(x for x in (op.path, op.control, op.constraint) if x).lower()
+        if "indirect" in blob or "injection" in blob:
+            return "indirect_prompt_injection_simulated"
+        if "confidential" in blob or "proprietary" in blob:
+            return "must_not_appear_violation"
+    return op.source_finding
+
+
 def attach_patch_lineage(
     operations: list[PatchOperation], findings: list[Finding]
 ) -> tuple[list[PatchOperation], list[PatchOperation]]:
@@ -216,17 +262,116 @@ def attach_patch_lineage(
         finding_types = sorted({f.finding_type for f in matched})
         probe_ids = sorted({f.probe_id for f in matched})
         finding_ids = sorted({f"{f.probe_id}:{f.finding_type}" for f in matched})
+        # PRIMARY target: the precise finding type this op principally remediates,
+        # constrained to a type actually present in the matched findings; else the
+        # first matched type. The primary probe is a matched probe of that type.
+        primary_type = patch_primary_finding_type(op)
+        if primary_type not in finding_types:
+            primary_type = finding_types[0]
+        primary_probe = next(
+            (f.probe_id for f in matched if f.finding_type == primary_type), probe_ids[0]
+        )
+        primary_id = f"{primary_probe}:{primary_type}"
+        secondary_ids = [fid for fid in finding_ids if fid != primary_id]
         linked.append(
             op.model_copy(
                 update={
-                    "source_finding": op.source_finding or finding_types[0],
+                    "source_finding": op.source_finding or primary_type,
                     "source_finding_types": finding_types,
                     "source_probe_ids": probe_ids,
                     "source_finding_ids": finding_ids,
+                    "primary_source_finding_type": primary_type,
+                    "primary_source_probe_id": primary_probe,
+                    "secondary_source_finding_ids": secondary_ids,
                 }
             )
         )
     return linked, unlinked
+
+
+def patch_status(op: PatchOperation, unresolved_finding_types) -> str:
+    """Applied-patch status computed from the PRIMARY target, not broad links.
+
+    * rejected_unlinked — no valid lineage at all.
+    * applied_requires_human_review — human-review op, or primary is the
+      unsupported proprietary-context finding (kept as an open risk).
+    * applied_but_primary_unresolved — the primary finding type still fails retest.
+    * applied_but_related_risk_unresolved — primary resolved, but a SECONDARY
+      (related) finding type this op also touched still fails retest.
+    * applied_and_resolved — primary resolved and no related risk remains.
+    """
+    unresolved = set(unresolved_finding_types or [])
+    has_lineage = bool(
+        op.primary_source_finding_type
+        or op.source_finding_ids
+        or op.source_probe_ids
+        or op.source_finding_types
+        or op.source_finding
+    )
+    if not has_lineage:
+        return "rejected_unlinked"
+    primary = (
+        op.primary_source_finding_type
+        or (op.source_finding_types[0] if op.source_finding_types else op.source_finding)
+    )
+    if op.operation is PatchOp.require_human_review_for_category:
+        return "applied_requires_human_review"
+    if primary == "must_not_appear_violation":
+        # Proprietary-context exposure has no approved auto-remediation.
+        return "applied_requires_human_review"
+    if primary in unresolved:
+        return "applied_but_primary_unresolved"
+    secondary = set(op.source_finding_types) - {primary}
+    if secondary & unresolved:
+        return "applied_but_related_risk_unresolved"
+    return "applied_and_resolved"
+
+
+def derive_human_review_mapping(
+    final_categories: list[str], after_results: list[ProbeResult]
+) -> list[dict]:
+    """Per-category derivation rows tying each category to unresolved findings.
+
+    For each final human-review category, returns its supporting unresolved
+    retest finding types/probe ids. A category with no supporting unresolved
+    finding is flagged ``proposed_by_agent`` (vs ``derived_from_retest``).
+    """
+    by_cat_types: dict[str, set] = {}
+    by_cat_probes: dict[str, set] = {}
+    for result in after_results:
+        for finding in result.findings:
+            category = finding_category(finding)
+            if not category:
+                continue
+            by_cat_types.setdefault(category, set()).add(finding.finding_type)
+            by_cat_probes.setdefault(category, set()).add(finding.probe_id)
+
+    rows: list[dict] = []
+    for category in sorted(final_categories):
+        types = sorted(by_cat_types.get(category, set()))
+        probes = sorted(by_cat_probes.get(category, set()))
+        if types:
+            reason = (
+                f"Derived from {len(probes)} unresolved retest finding(s): "
+                f"{', '.join(types)}."
+            )
+            source = "derived_from_retest"
+        else:
+            reason = (
+                "Proposed by the tuning agent; no unresolved retest finding "
+                "currently supports it."
+            )
+            source = "proposed_by_agent"
+        rows.append(
+            {
+                "category": category,
+                "derived_from_finding_types": types,
+                "derived_from_probe_ids": probes,
+                "source": source,
+                "reason": reason,
+            }
+        )
+    return rows
 
 
 def patch_lineage_label(op: PatchOperation) -> str:

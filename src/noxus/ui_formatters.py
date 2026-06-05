@@ -38,6 +38,20 @@ _READINESS_COLORS = {
     ReadinessState.FAIL.value: "red",
 }
 
+# Readiness GATE label — kept separate from remediation progress so a "blocked"
+# gate (score 0) is never read as "the patch engine did nothing".
+_READINESS_GATE = {
+    ReadinessState.PASS.value: "PASS",
+    ReadinessState.CONDITIONAL_PASS.value: "CONDITIONAL",
+    ReadinessState.HUMAN_REVIEW_REQUIRED.value: "BLOCKED",
+    ReadinessState.FAIL.value: "BLOCKED",
+}
+
+
+def readiness_gate(readiness_state) -> str:
+    """Map a readiness state to a gate label: PASS / CONDITIONAL / BLOCKED."""
+    return _READINESS_GATE.get(_value(readiness_state), "BLOCKED")
+
 _READINESS_COPY = {
     ReadinessState.PASS.value: {
         "headline": "PASS — no open findings in retest",
@@ -190,17 +204,16 @@ def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
     source_ids = list(op.source_finding_ids)
     source_probes = list(op.source_probe_ids)
     source_types = list(op.source_finding_types)
-    label = remediation.patch_lineage_label(op)
-    addressed = set(source_types) or ({op.source_finding} if op.source_finding else set())
-    unresolved = set(unresolved_finding_types or [])
-    if not source_ids and not source_probes and not source_types and not op.source_finding:
-        status = "rejected_unlinked"
-    elif op.operation is PatchOp.require_human_review_for_category:
-        status = "applied_requires_human_review"
-    elif addressed & unresolved:
-        status = "applied_but_risk_unresolved"
-    else:
-        status = "applied_and_resolved"
+    # PRIMARY lineage is highlighted first; the rest is secondary/audit detail.
+    primary_type = op.primary_source_finding_type
+    primary_probe = op.primary_source_probe_id
+    primary_label = (
+        f"{primary_probe}:{primary_type}"
+        if primary_probe and primary_type
+        else (primary_type or remediation.patch_lineage_label(op))
+    )
+    # Status is computed from the PRIMARY target (not broad secondary links).
+    status = remediation.patch_status(op, unresolved_finding_types)
     return {
         "operation": _value(op.operation),
         "target": op.target,
@@ -209,7 +222,11 @@ def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
         "source_finding_ids": source_ids,
         "source_probe_ids": source_probes,
         "source_finding_types": source_types,
-        "source_label": label,
+        "primary_source_finding_type": primary_type,
+        "primary_source_probe_id": primary_probe,
+        "primary_source_label": primary_label,
+        "secondary_source_finding_ids": list(op.secondary_source_finding_ids),
+        "source_label": remediation.patch_lineage_label(op),
         "status": status,
         "is_safety_rail": op.operation is PatchOp.insert_or_update_critical_safety_rail,
     }
@@ -422,6 +439,20 @@ def build_remediation_model(report) -> dict:
             "Some patches resolved findings; unresolved findings still require "
             "human review."
         )
+    resolved_finding_count = getattr(meta, "resolved_finding_count", 0)
+    # Score-adjacent explanation: a 0 readiness-gate score with real remediation
+    # progress must be explained as a GATE state, not patch ineffectiveness.
+    after_score_explanation = ""
+    if report.after_score == 0 and (resolved_finding_count or resolved_types):
+        after_score_explanation = (
+            "Readiness remains blocked because high-risk findings remain. "
+            "Remediation progress is shown separately."
+        )
+    # Human-review derivation: every final category tied to the unresolved retest
+    # finding types/probe ids that support it (or flagged proposed_by_agent).
+    human_review_derivation = remediation.derive_human_review_mapping(
+        list(report.human_review_requirements), report.after_results
+    )
     return {
         "patch_application_count": patch_count,
         "patched_policy_effective": getattr(meta, "patched_policy_effective", False),
@@ -430,14 +461,83 @@ def build_remediation_model(report) -> dict:
         ),
         "resolved_probe_count": getattr(meta, "resolved_probe_count", 0),
         "unresolved_probe_count": getattr(meta, "unresolved_probe_count", 0),
-        "resolved_finding_count": getattr(meta, "resolved_finding_count", 0),
+        "resolved_finding_count": resolved_finding_count,
         "unresolved_finding_count": getattr(meta, "unresolved_finding_count", 0),
         "rejected_proposal_count": getattr(meta, "rejected_proposal_count", 0),
         "resolved_finding_types": resolved_types,
+        "resolved_primary_finding_types": resolved_types,
+        "unresolved_finding_types": sorted(unresolved_types),
         "unresolved_findings": unresolved_findings,
         "human_review_categories": list(report.human_review_requirements),
+        "human_review_derivation": human_review_derivation,
+        # Remediation PROGRESS is reported separately from the readiness gate so
+        # the gate score is never read as a measure of patch effectiveness.
+        "remediation_progress": {
+            "resolved": resolved_finding_count,
+            "unresolved": getattr(meta, "unresolved_finding_count", 0),
+            "label": (
+                f"{resolved_finding_count} resolved / "
+                f"{getattr(meta, 'unresolved_finding_count', 0)} unresolved"
+            ),
+        },
+        "readiness_gate": readiness_gate(report.readiness_state),
+        "readiness_gate_score": report.after_score,
         "after_score": report.after_score,
+        "after_score_label": "Readiness gate score",
+        "after_score_explanation": after_score_explanation,
         "blocking_explanation": explanation,
+    }
+
+
+_REPORT_SUMMARY_COPY = (
+    "Noxus did not mark this target safe. It resolved supported findings, "
+    "preserved unresolved risks, and routed the remaining categories to human "
+    "review."
+)
+
+
+def build_report_summary_model(report) -> dict:
+    """Judge-safe, top-level report summary that separates progress from the gate.
+
+    * what_improved — resolved finding count + the (primary) finding types resolved;
+    * what_remains_blocked — unresolved finding types + human-review categories;
+    * why_not_pass — the honest reason the final state is not PASS (non-empty
+      whenever the readiness gate is not PASS).
+
+    Never presents the patch-application count as a success count, and never
+    implies PASS when blocking findings remain.
+    """
+    meta = report.metadata
+    before_types = {f.finding_type for r in report.before_results for f in r.findings}
+    unresolved_types = sorted(
+        {f.finding_type for r in report.after_results for f in r.findings}
+    )
+    resolved_types = sorted(before_types - set(unresolved_types))
+    resolved_finding_count = getattr(meta, "resolved_finding_count", 0)
+    human_review_categories = list(report.human_review_requirements)
+    is_pass = report.readiness_state is ReadinessState.PASS
+    why_not_pass = ""
+    if not is_pass:
+        why_not_pass = (
+            "Final state is not PASS because unsupported or unresolved high-risk "
+            "findings remain after retest."
+        )
+    return {
+        "readiness_gate": readiness_gate(report.readiness_state),
+        "is_pass": is_pass,
+        "what_improved": {
+            "resolved_finding_count": resolved_finding_count,
+            "resolved_finding_types": resolved_types,
+            # The resolved types ARE the primary finding types remediated.
+            "primary_finding_types_resolved": resolved_types,
+        },
+        "what_remains_blocked": {
+            "unresolved_finding_types": unresolved_types,
+            "human_review_categories": human_review_categories,
+        },
+        "why_not_pass": why_not_pass,
+        # Demo copy shown only when the target is NOT marked safe.
+        "summary_copy": "" if is_pass else _REPORT_SUMMARY_COPY,
     }
 
 
@@ -486,6 +586,7 @@ def build_red_blue_dashboard_model(report) -> dict:
             ),
             "safety_rail_preview": _safety_rail_preview(report),
             "human_review_requirements": list(report.human_review_requirements),
+            "human_review_derivation": remediation_model["human_review_derivation"],
             "open_risks": list(report.open_risks),
             "remediation": remediation_model,
             "resolved_finding_types": remediation_model["resolved_finding_types"],
@@ -524,14 +625,36 @@ def build_evidence_report_model(report) -> dict:
 
 
 def build_readiness_summary_model(report) -> dict:
-    """Return compact readiness metrics derived from the report."""
+    """Return compact readiness metrics derived from the report.
+
+    The ``after_score`` is the READINESS GATE score; it is labeled as such and
+    paired with a separate remediation-PROGRESS view so a 0 gate score is never
+    read as "the patch engine did nothing".
+    """
     before = summarize_probe_results(report.before_results)
     after = summarize_probe_results(report.after_results)
     evidence = build_evidence_report_model(report)
+    meta = report.metadata
+    resolved_finding_count = getattr(meta, "resolved_finding_count", 0)
+    unresolved_finding_count = getattr(meta, "unresolved_finding_count", 0)
+    after_score_explanation = ""
+    if report.after_score == 0 and resolved_finding_count:
+        after_score_explanation = (
+            "Readiness remains blocked because high-risk findings remain. "
+            "Remediation progress is shown separately."
+        )
     return {
         "badge": format_readiness_badge(report.readiness_state),
+        "readiness_gate": readiness_gate(report.readiness_state),
         "before_score": report.before_score,
         "after_score": report.after_score,
+        "after_score_label": "Readiness gate score",
+        "after_score_explanation": after_score_explanation,
+        "remediation_progress": {
+            "resolved": resolved_finding_count,
+            "unresolved": unresolved_finding_count,
+            "label": f"{resolved_finding_count} resolved / {unresolved_finding_count} unresolved",
+        },
         "score_delta": report.after_score - report.before_score,
         "before_summary": before,
         "after_summary": after,

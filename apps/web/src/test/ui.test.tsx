@@ -15,6 +15,7 @@ import type { PolicyErrorDetail } from "../types/noxus";
 import { ReadinessSummary } from "../components/ReadinessSummary";
 import { OpenRisks } from "../components/OpenRisks";
 import { RedBlueDashboard } from "../components/RedBlueDashboard";
+import { ReportSummary } from "../components/ReportSummary";
 import { RoleObservability } from "../components/RoleObservability";
 import { NAV_ITEMS, type SectionId } from "../components/nav";
 import type { AgentRole, Mode, ProviderConfig } from "../types/noxus";
@@ -567,9 +568,95 @@ describe("RedBlueDashboard remediation honesty (resolved vs unresolved)", () => 
 
   it("no_fake_pass_when_unresolved_findings_remain", () => {
     render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
-    // Unresolved risk is surfaced; no green "resolved" success for the applied patch.
+    // Unresolved risk is surfaced; no "primary resolved" success for the patch.
     expect(screen.getByText(/unresolved findings: 9/i)).toBeInTheDocument();
-    expect(screen.getByText(/applied · risk unresolved/i)).toBeInTheDocument();
-    expect(screen.queryByText(/applied · resolved/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/applied · primary unresolved/i)).toBeInTheDocument();
+    expect(screen.queryByText(/· primary resolved/i)).not.toBeInTheDocument();
+  });
+});
+
+import { conditionalReportSummary } from "./fixtures";
+
+describe("ReadinessSummary readiness-gate vs remediation-progress (Fix 1)", () => {
+  it("ui_labels_after_score_as_readiness_gate_score", () => {
+    render(<ReadinessSummary model={conditionalPassSummary} />);
+    expect(screen.getByText("Readiness gate score")).toBeInTheDocument();
+    expect(screen.getByText(/Readiness gate: CONDITIONAL/i)).toBeInTheDocument();
+  });
+
+  it("ui_shows_remediation_progress_next_to_score", () => {
+    render(<ReadinessSummary model={conditionalPassSummary} />);
+    expect(screen.getByText("Remediation progress")).toBeInTheDocument();
+    expect(screen.getByText("5 / 1")).toBeInTheDocument();
+    expect(screen.getByText("resolved / unresolved findings")).toBeInTheDocument();
+  });
+
+  it("ui_explains_zero_after_score_when_resolved_findings_exist", () => {
+    const zeroGate = {
+      ...conditionalPassSummary,
+      readiness_gate: "BLOCKED",
+      after_score: 0,
+      after_score_explanation:
+        "Readiness remains blocked because high-risk findings remain. Remediation progress is shown separately.",
+    };
+    render(<ReadinessSummary model={zeroGate} />);
+    expect(
+      screen.getByText(/Readiness remains blocked because high-risk findings remain/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Remediation progress is shown separately/i)).toBeInTheDocument();
+  });
+});
+
+describe("RedBlueDashboard primary lineage + derivation (Fix 2 & 3)", () => {
+  it("ui_shows_primary_source_before_secondary_sources", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.getByText(/Primary source:/i)).toBeInTheDocument();
+    expect(
+      screen.getByText("probe_indirect_prompt_injection:indirect_prompt_injection_simulated"),
+    ).toBeInTheDocument();
+  });
+
+  it("ui_renders_human_review_derivation", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(
+      screen.getByText(/Human review requirements \(derived from unresolved findings\)/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/derived from retest/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Derived from 1 unresolved retest finding/i),
+    ).toBeInTheDocument();
+  });
+
+  it("ui_separates_readiness_gate_from_remediation_progress", () => {
+    render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
+    expect(screen.getByText(/readiness gate: BLOCKED/i)).toBeInTheDocument();
+    expect(screen.getByText(/readiness gate score: 0\/100/i)).toBeInTheDocument();
+    expect(screen.getByText(/remediation progress: 0 resolved \/ 9 unresolved/i)).toBeInTheDocument();
+  });
+});
+
+describe("ReportSummary judge-safe summary (Fix 4)", () => {
+  it("report_summary_lists_resolved_and_unresolved_types", () => {
+    render(<ReportSummary model={conditionalReportSummary} />);
+    expect(screen.getByText("What improved")).toBeInTheDocument();
+    expect(screen.getByText("pii_leakage")).toBeInTheDocument();
+    expect(screen.getByText("What remains blocked")).toBeInTheDocument();
+    expect(screen.getByText("must_not_appear_violation")).toBeInTheDocument();
+  });
+
+  it("report_summary_explains_no_pass_with_demo_copy", () => {
+    render(<ReportSummary model={conditionalReportSummary} />);
+    expect(
+      screen.getByText(/Noxus did not mark this target safe/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Final state is not PASS because unsupported or unresolved/i),
+    ).toBeInTheDocument();
+  });
+
+  it("ui_does_not_present_patch_count_as_success_count", () => {
+    render(<ReportSummary model={conditionalReportSummary} />);
+    // The "what improved" count is the RESOLVED-finding count (5), not a patch count.
+    expect(screen.getByText(/5 resolved finding/i)).toBeInTheDocument();
   });
 });

@@ -65,10 +65,20 @@ export interface ReadinessBadge {
   is_pass: boolean;
 }
 
+export interface RemediationProgress {
+  resolved: number;
+  unresolved: number;
+  label: string;
+}
+
 export interface ReadinessSummary {
   badge: ReadinessBadge;
+  readiness_gate: string;
   before_score: number;
   after_score: number;
+  after_score_label: string;
+  after_score_explanation: string;
+  remediation_progress: RemediationProgress;
   score_delta: number;
   before_summary: ProbeSummary;
   after_summary: ProbeSummary;
@@ -122,7 +132,8 @@ export interface ProbeRow {
 
 export type PatchStatus =
   | "applied_and_resolved"
-  | "applied_but_risk_unresolved"
+  | "applied_but_primary_unresolved"
+  | "applied_but_related_risk_unresolved"
   | "applied_requires_human_review"
   | "rejected_unlinked";
 
@@ -134,9 +145,22 @@ export interface PatchRow {
   source_finding_ids: string[];
   source_probe_ids: string[];
   source_finding_types: string[];
+  // PRIMARY lineage is highlighted first; the rest is secondary/audit detail.
+  primary_source_finding_type: string | null;
+  primary_source_probe_id: string | null;
+  primary_source_label: string;
+  secondary_source_finding_ids: string[];
   source_label: string;
   status: PatchStatus;
   is_safety_rail: boolean;
+}
+
+export interface HumanReviewDerivationRow {
+  category: string;
+  derived_from_finding_types: string[];
+  derived_from_probe_ids: string[];
+  source: "derived_from_retest" | "proposed_by_agent";
+  reason: string;
 }
 
 export interface RemediationModel {
@@ -149,10 +173,35 @@ export interface RemediationModel {
   unresolved_finding_count: number;
   rejected_proposal_count: number;
   resolved_finding_types: string[];
+  resolved_primary_finding_types: string[];
+  unresolved_finding_types: string[];
   unresolved_findings: FindingRow[];
   human_review_categories: string[];
+  human_review_derivation: HumanReviewDerivationRow[];
+  remediation_progress: RemediationProgress;
+  // Readiness GATE — reported separately from remediation progress.
+  readiness_gate: string;
+  readiness_gate_score: number;
   after_score: number;
+  after_score_label: string;
+  after_score_explanation: string;
   blocking_explanation: string;
+}
+
+export interface ReportSummary {
+  readiness_gate: string;
+  is_pass: boolean;
+  what_improved: {
+    resolved_finding_count: number;
+    resolved_finding_types: string[];
+    primary_finding_types_resolved: string[];
+  };
+  what_remains_blocked: {
+    unresolved_finding_types: string[];
+    human_review_categories: string[];
+  };
+  why_not_pass: string;
+  summary_copy: string;
 }
 
 export interface RedBlueModel {
@@ -173,6 +222,7 @@ export interface RedBlueModel {
     patch_engine_note: string;
     safety_rail_preview: string;
     human_review_requirements: string[];
+    human_review_derivation: HumanReviewDerivationRow[];
     open_risks: string[];
     remediation: RemediationModel;
     resolved_finding_types: string[];
@@ -307,6 +357,8 @@ export interface AssessmentResponse {
   readiness: ReadinessSummary;
   timeline: TimelineStep[];
   red_blue: RedBlueModel;
+  remediation: RemediationModel;
+  report_summary: ReportSummary;
   evidence: EvidenceModel;
   safeguards: SafeguardItem[];
   agent_trace: AgentTrace;

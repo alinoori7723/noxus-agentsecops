@@ -217,6 +217,13 @@ class PatchOperation(BaseModel):
     source_finding_ids: list[str] = Field(default_factory=list)
     source_probe_ids: list[str] = Field(default_factory=list)
     source_finding_types: list[str] = Field(default_factory=list)
+    # PRIMARY lineage: the single finding type/probe this operation is principally
+    # meant to remediate. Patch status is computed from the PRIMARY target so a
+    # prompt-injection patch is not marked "unresolved" merely because an
+    # unrelated finding co-occurred. The remaining links are secondary/audit.
+    primary_source_finding_type: Optional[str] = None
+    primary_source_probe_id: Optional[str] = None
+    secondary_source_finding_ids: list[str] = Field(default_factory=list)
 
 
 class PatchSet(BaseModel):

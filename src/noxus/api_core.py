@@ -662,6 +662,7 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "timeline": ui_formatters.build_demo_timeline_model(report),
         "red_blue": red_blue,
         "remediation": red_blue["blue"]["remediation"],
+        "report_summary": ui_formatters.build_report_summary_model(report),
         "evidence": ui_formatters.build_evidence_report_model(report),
         "safeguards": ui_formatters.build_engineering_safeguards_model(),
         "agent_trace": trace,

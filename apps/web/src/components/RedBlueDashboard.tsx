@@ -38,8 +38,12 @@ function ProbeCard({ probe }: { probe: ProbeRow }) {
 }
 
 const PATCH_STATUS_META: Record<string, { label: string; color: ChipColor }> = {
-  applied_and_resolved: { label: "applied · resolved", color: "green" },
-  applied_but_risk_unresolved: { label: "applied · risk unresolved", color: "amber" },
+  applied_and_resolved: { label: "applied · primary resolved", color: "green" },
+  applied_but_related_risk_unresolved: {
+    label: "applied · primary resolved · related risk unresolved",
+    color: "amber",
+  },
+  applied_but_primary_unresolved: { label: "applied · primary unresolved", color: "amber" },
   applied_requires_human_review: { label: "applied · human review", color: "amber" },
   rejected_unlinked: { label: "rejected · unlinked", color: "red" },
 };
@@ -63,8 +67,19 @@ function PatchCard({ patch }: { patch: PatchRow }) {
         {patch.detail && <StatusChip label={patch.detail} color="neutral" mono />}
       </div>
       <p className="mt-2 text-[11px] text-slate-500">
-        Source finding: <span className="font-mono text-slate-700">{patch.source_label}</span>
+        Primary source:{" "}
+        <span className="font-mono font-bold text-slate-800">
+          {patch.primary_source_label}
+        </span>
       </p>
+      {patch.secondary_source_finding_ids.length > 0 && (
+        <p className="mt-0.5 text-[11px] text-slate-400">
+          Secondary sources:{" "}
+          <span className="font-mono text-slate-500">
+            {patch.secondary_source_finding_ids.join(", ")}
+          </span>
+        </p>
+      )}
     </div>
   );
 }
@@ -156,11 +171,33 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
           </div>
           <div className="space-y-3 p-4">
             <div className="kicker flex items-center gap-1.5">
+              <Wrench size={13} /> Readiness gate vs remediation progress
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <StatusChip
+                label={`readiness gate: ${rem.readiness_gate}`}
+                color={rem.readiness_gate === "PASS" ? "green" : "amber"}
+              />
+              <StatusChip
+                label={`readiness gate score: ${rem.readiness_gate_score}/100`}
+                color={rem.readiness_gate_score > 0 ? "green" : "amber"}
+              />
+              <StatusChip
+                label={`remediation progress: ${rem.remediation_progress.label}`}
+                color={rem.remediation_progress.resolved > 0 ? "green" : "neutral"}
+              />
+            </div>
+            {rem.after_score_explanation && (
+              <p className="text-[12px] font-medium text-amber-700">
+                {rem.after_score_explanation}
+              </p>
+            )}
+            <div className="kicker flex items-center gap-1.5 pt-1">
               <Wrench size={13} /> Remediation effectiveness
             </div>
             <div className="flex flex-wrap gap-1.5">
               <StatusChip
-                label={`applied: ${rem.patch_application_count}`}
+                label={`patch operations applied: ${rem.patch_application_count}`}
                 color="blue"
               />
               <StatusChip
@@ -227,11 +264,45 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
               )}
             </div>
 
-            <div className="kicker pt-1">Human review requirements</div>
-            {blue.human_review_requirements.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {blue.human_review_requirements.map((r) => (
-                  <StatusChip key={r} label={r} color="amber" />
+            <div className="kicker pt-1">
+              Human review requirements (derived from unresolved findings)
+            </div>
+            {blue.human_review_derivation.length > 0 ? (
+              <div className="space-y-2">
+                {blue.human_review_derivation.map((row) => (
+                  <div
+                    key={row.category}
+                    className="rounded-lg border border-amber-200 bg-amber-50/50 p-3"
+                  >
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusChip label={row.category} color="amber" />
+                      <StatusChip
+                        label={
+                          row.source === "derived_from_retest"
+                            ? "derived from retest"
+                            : "proposed by agent"
+                        }
+                        color={row.source === "derived_from_retest" ? "blue" : "neutral"}
+                      />
+                    </div>
+                    <p className="mt-1.5 text-[11.5px] text-slate-600">{row.reason}</p>
+                    {row.derived_from_finding_types.length > 0 && (
+                      <p className="mt-1 text-[11px] text-slate-500">
+                        finding types:{" "}
+                        <span className="font-mono text-slate-700">
+                          {row.derived_from_finding_types.join(", ")}
+                        </span>
+                      </p>
+                    )}
+                    {row.derived_from_probe_ids.length > 0 && (
+                      <p className="mt-0.5 text-[11px] text-slate-500">
+                        probes:{" "}
+                        <span className="font-mono text-slate-700">
+                          {row.derived_from_probe_ids.join(", ")}
+                        </span>
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             ) : (

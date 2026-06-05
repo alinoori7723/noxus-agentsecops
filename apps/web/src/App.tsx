@@ -12,6 +12,7 @@ import {
 } from "./components/ProviderSettings";
 import { EmptyState } from "./components/EmptyState";
 import { ReadinessSummary } from "./components/ReadinessSummary";
+import { ReportSummary } from "./components/ReportSummary";
 import { RoleObservability } from "./components/RoleObservability";
 import { AuditTimeline } from "./components/AuditTimeline";
 import { RedBlueDashboard } from "./components/RedBlueDashboard";
@@ -306,6 +307,7 @@ export default function App() {
                 {result.red_team_failure?.continued_after_red_failure && (
                   <RedTeamFallbackNotice failure={result.red_team_failure} />
                 )}
+                <ReportSummary model={result.report_summary} />
                 <ReadinessSummary model={result.readiness} />
                 <RoleObservability
                   trace={result.agent_trace}

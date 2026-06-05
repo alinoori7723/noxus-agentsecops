@@ -62,7 +62,14 @@ export function ReadinessSummary({ model }: { model: Summary }) {
             VERDICT_BAR[badge.color],
           )}
         />
-        <StatusChip label={badge.state} color={badge.color} mono />
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusChip
+            label={`Readiness gate: ${model.readiness_gate}`}
+            color={badge.color}
+            mono
+          />
+          <StatusChip label={badge.state} color={badge.color} mono />
+        </div>
         <h3 className="mt-3 text-2xl font-black leading-tight text-slate-900">
           {badge.headline}
         </h3>
@@ -80,22 +87,22 @@ export function ReadinessSummary({ model }: { model: Summary }) {
 
       <div className="grid grid-cols-2 gap-3">
         <Metric
-          label="Before score"
+          label="Before risk score"
           value={`${model.before_score}/100`}
           detail={`${model.before_summary.failed_probes} failed probes`}
           color={model.before_summary.failed_probes ? "red" : "green"}
         />
         <Metric
-          label="After score"
+          label={model.after_score_label}
           value={`${model.after_score}/100`}
           detail={`delta ${model.score_delta >= 0 ? "+" : ""}${model.score_delta}`}
           color={badge.color}
         />
         <Metric
-          label="Open risks"
-          value={String(model.open_risk_count)}
-          detail={`${model.after_summary.findings} retest findings`}
-          color={model.open_risk_count ? "amber" : "green"}
+          label="Remediation progress"
+          value={`${model.remediation_progress.resolved} / ${model.remediation_progress.unresolved}`}
+          detail="resolved / unresolved findings"
+          color={model.remediation_progress.resolved ? "green" : "neutral"}
         />
         <Metric
           label="Human review"
@@ -104,6 +111,11 @@ export function ReadinessSummary({ model }: { model: Summary }) {
           color={model.human_review_count ? "amber" : "neutral"}
         />
       </div>
+      {model.after_score_explanation && (
+        <p className="col-span-2 -mt-1 text-xs font-medium text-amber-700">
+          {model.after_score_explanation}
+        </p>
+      )}
     </div>
   );
 }
