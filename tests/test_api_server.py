@@ -66,7 +66,13 @@ def test_agent_assisted_missing_config_returns_400(client):
     assert "provider_config" in r.json()["detail"]
 
 
-def test_provider_failure_does_not_echo_api_key(client):
+def test_provider_failure_does_not_echo_api_key(client, monkeypatch):
+    # An unreachable endpoint is a transient network failure. With the
+    # deterministic baseline preserved this now returns a partial
+    # HUMAN_REVIEW_REQUIRED report (Fix 5); otherwise a clean 4xx/5xx. In every
+    # case the api_key must NEVER appear in the response text.
+    monkeypatch.setenv("NOXUS_LLM_MAX_RETRIES", "0")  # keep the test fast
+    monkeypatch.setenv("NOXUS_LLM_RETRY_BACKOFF_SECONDS", "0")
     s = client.get("/api/sample-inputs").json()
     r = client.post(
         "/api/assessments/run",
@@ -85,8 +91,11 @@ def test_provider_failure_does_not_echo_api_key(client):
             },
         },
     )
-    assert r.status_code in (400, 502)
+    assert r.status_code in (200, 400, 502, 504)
     assert _SENTINEL_KEY not in r.text
+    if r.status_code == 200:
+        # Partial report path: baseline preserved, role-tagged, no key leak.
+        assert r.json()["readiness_state"] == "HUMAN_REVIEW_REQUIRED"
 
 
 def _det_report(client):

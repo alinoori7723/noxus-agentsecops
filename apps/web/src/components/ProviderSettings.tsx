@@ -171,8 +171,16 @@ function Diagnostics({ testState }: { testState: ProviderTestState }) {
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1">
                 <StatusChip
-                  label={r.ok ? "schema contract ok" : "schema contract failed"}
-                  color={r.ok ? "green" : "red"}
+                  label={
+                    r.ok
+                      ? "schema contract ok"
+                      : r.timed_out
+                        ? "timed out"
+                        : r.error_type === "provider_error"
+                          ? "provider error"
+                          : "schema contract failed"
+                  }
+                  color={r.ok ? "green" : r.timed_out ? "amber" : "red"}
                 />
               </div>
               <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">

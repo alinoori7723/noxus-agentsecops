@@ -288,6 +288,11 @@ export interface AgentTrace {
   // semantic-judge resilience status (so a degraded run is never silent).
   evidence_basis: "deterministic_baseline" | "red_team_augmented" | "degraded_fallback" | null;
   semantic_judge_status: "used" | "failed" | "skipped" | null;
+  // Timeout/fallback resilience trace (presentation-only).
+  timeout_failed_role: string | null;
+  timeout_fatal: boolean;
+  tuning_fallback_used: boolean;
+  tuning_fallback_model: string | null;
   stages: AgentTraceStage[];
 }
 
@@ -300,6 +305,30 @@ export interface ProviderTestRoleResult {
   response_validated: boolean;
   message: string;
   debug_excerpt: string | null;
+  // Distinguishes a TIMEOUT from a schema-contract failure (or none / ok).
+  error_type: "timeout" | "schema" | "provider_error" | null;
+  timed_out: boolean;
+}
+
+// Role-aware LLM timeout/provider-error diagnostics (presentation-only; no key).
+export interface TimeoutFailure {
+  failed_role: string;
+  role_label: string;
+  failed_stage: string | null;
+  provider_type: string | null;
+  model: string | null;
+  timeout_seconds: number | null;
+  retry_count: number;
+  message: string | null;
+  // True when the timeout routed the run to HUMAN_REVIEW_REQUIRED.
+  fatal: boolean;
+}
+
+export interface TuningFallback {
+  used: boolean;
+  original_model: string | null;
+  fallback_model: string | null;
+  reason: string | null;
 }
 
 export interface SchemaFailure {
@@ -367,6 +396,8 @@ export interface AssessmentResponse {
   schema_failure: SchemaFailure | null;
   red_team_failure: RedTeamFailure | null;
   semantic_judge_failure: SemanticJudgeFailure | null;
+  timeout_failure: TimeoutFailure | null;
+  tuning_fallback: TuningFallback | null;
   metadata: {
     mode: string;
     tuning_iterations: number;

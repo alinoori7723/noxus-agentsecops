@@ -27,6 +27,12 @@ from .evaluator import DeterministicEvaluator
 from .errors import SchemaContractError
 from .json_contracts import sanitize_excerpt
 from .llm_provider import LLMProvider
+from .llm_runtime import (
+    RoleBoundProvider,
+    RoleProviderError,
+    RoleTimeoutError,
+    TimeoutConfig,
+)
 from .patch_engine import apply_patch_set
 from .patch_mapper import generate_patches_from_findings
 from .policy_loader import validate_policy
@@ -72,8 +78,17 @@ def run_readiness_assessment(
     red_model: str = "gemini-3.5-flash",
     judge_model: str = "gemini-3.5-flash",
     tuning_model: str = "gemini-3.1-pro-preview",
+    timeout_config: Optional[TimeoutConfig] = None,
+    tuning_fallback_model: Optional[str] = None,
+    provider_type: Optional[str] = None,
 ) -> ReadinessReport:
-    """Run a readiness assessment in the requested mode."""
+    """Run a readiness assessment in the requested mode.
+
+    ``timeout_config`` (per-role timeouts + retry/backoff) and
+    ``tuning_fallback_model`` make live agent-assisted runs resilient to slow
+    providers; both default to env-derived values when omitted. ``provider_type``
+    is presentation-only (carried into timeout diagnostics).
+    """
     if mode == "deterministic":
         return _run_deterministic(system_prompt, policy, business_context_text)
     if mode == "agent_assisted":
@@ -87,6 +102,9 @@ def run_readiness_assessment(
             red_model,
             judge_model,
             tuning_model,
+            timeout_config or TimeoutConfig.from_env(),
+            tuning_fallback_model,
+            provider_type,
         )
     raise ValueError(f"Unknown mode: {mode!r}")
 
@@ -304,6 +322,82 @@ def _human_review_report(
     )
 
 
+def _timeout_message(diag: dict) -> str:
+    """A safe, role-specific one-line timeout/provider-error message (no secrets)."""
+    label = diag["role_label"]
+    model = diag.get("model") or "the configured model"
+    if diag.get("is_timeout"):
+        retries = diag.get("retry_count", 0)
+        retry_phrase = (
+            "no retries" if retries == 0
+            else f"{retries} retr{'y' if retries == 1 else 'ies'}"
+        )
+        secs = diag.get("timeout_seconds")
+        secs_phrase = f"{secs:.0f}s" if isinstance(secs, (int, float)) else "the role timeout"
+        return (
+            f"LLM request timed out during {label} using {model} "
+            f"(timeout {secs_phrase}, {retry_phrase})."
+        )
+    return f"LLM provider error during {label} using {model}: {diag.get('message', '')}".strip()
+
+
+def _timeout_human_review_report(
+    stage: str,
+    error,
+    before_results: Optional[list[ProbeResult]],
+    business_context_text: str,
+    *,
+    fatal: bool = True,
+) -> ReadinessReport:
+    """HUMAN_REVIEW_REQUIRED report on a fatal LLM TIMEOUT (baseline preserved).
+
+    Mirrors ``_human_review_report`` but records role-aware TIMEOUT diagnostics
+    (role / model / provider_type / timeout_seconds / retry_count) instead of a
+    schema-contract excerpt. No patches are applied and no PASS is faked; the
+    deterministic baseline findings stay visible as open risks.
+    """
+    before = before_results or []
+    diag = error.diagnostics()
+    msg = _timeout_message(diag)
+    open_risks = [
+        f"Agent-assisted stage '{stage}' did not complete: {msg} "
+        "LLM execution aborted; no patches applied. The deterministic baseline "
+        "below is preserved."
+    ]
+    for r in before:
+        for f in r.findings:
+            open_risks.append(
+                f"{f.probe_id}: {f.finding_type} ({f.severity.value}) — {f.evidence}"
+            )
+    metadata = ReportMetadata(
+        business_context_text=business_context_text,
+        mode="agent_assisted",
+        tuning_iterations=0,
+        failed_stage=stage,
+        failed_role=diag.get("failed_role") or _STAGE_ROLE.get(stage),
+        timeout_failed_role=diag.get("failed_role"),
+        timeout_failed_stage=stage,
+        timeout_provider_type=diag.get("provider_type"),
+        timeout_model=diag.get("model"),
+        timeout_seconds=diag.get("timeout_seconds"),
+        timeout_retry_count=diag.get("retry_count", 0),
+        timeout_message=msg,
+        timeout_fatal=fatal,
+    )
+    return ReadinessReport(
+        probes_run=[r.probe_id for r in before],
+        before_results=before,
+        after_results=[],
+        patch_operations_applied=[],
+        before_score=score_from_results(before) if before else 0,
+        after_score=0,
+        readiness_state=ReadinessState.HUMAN_REVIEW_REQUIRED,
+        open_risks=open_risks,
+        human_review_requirements=["llm_timeout"],
+        metadata=metadata,
+    )
+
+
 def _run_agent_assisted(
     system_prompt: str,
     policy: Any,
@@ -312,6 +406,9 @@ def _run_agent_assisted(
     red_model: str,
     judge_model: str,
     tuning_model: str,
+    timeout_config: TimeoutConfig,
+    tuning_fallback_model: Optional[str],
+    provider_type: Optional[str],
 ) -> ReadinessReport:
     # Validate the INPUT policy outside the fail-safe try: a malformed input
     # policy is a caller error, not an LLM-caused failure, and must propagate
@@ -320,8 +417,32 @@ def _run_agent_assisted(
     sp = _as_policy(policy)
 
     evaluator = DeterministicEvaluator()
-    judge = SemanticJudgeAgent(provider, judge_model)
-    tuner = PolicyTuningAgent(provider, tuning_model)
+
+    # Wrap the raw provider per agent role so EVERY call (primary + repair) uses
+    # that role's configured timeout and bounded transient-retry/backoff, and any
+    # final failure is tagged with the role (for honest, role-specific messages).
+    def _role_provider(role: str) -> RoleBoundProvider:
+        return RoleBoundProvider(
+            provider,
+            role=role,
+            provider_type=provider_type,
+            timeout=timeout_config.timeout_for(role),
+            max_retries=timeout_config.max_retries,
+            backoff_seconds=timeout_config.backoff_seconds,
+        )
+
+    red_provider = _role_provider("red")
+    judge_provider = _role_provider("judge")
+    tuning_provider = _role_provider("tuning")
+    judge = SemanticJudgeAgent(judge_provider, judge_model)
+    tuner = PolicyTuningAgent(tuning_provider, tuning_model)
+    # Optional fallback tuner (Fix 4): a second, typically smaller/faster model
+    # tried ONCE if the primary tuning model times out after its retries.
+    fallback_tuner: Optional[PolicyTuningAgent] = None
+    if tuning_fallback_model:
+        fallback_tuner = PolicyTuningAgent(_role_provider("tuning"), tuning_fallback_model)
+    # Mutable record of an actually-used tuning fallback (stamped onto the report).
+    tuning_fallback_state: dict = {}
 
     current_prompt = system_prompt
     current_policy = sp
@@ -346,9 +467,21 @@ def _run_agent_assisted(
     # fabricate Red Team probes.
     probes = baseline_probes
     try:
-        red = RedTeamAgent(provider, red_model)
+        red = RedTeamAgent(red_provider, red_model)
         agent_probes = red.generate_probes(system_prompt, sp, business_context_text)
         probes = baseline_probes + agent_probes
+    except (RoleTimeoutError, RoleProviderError) as red_to:
+        # Red TIMED OUT. Preserve the deterministic baseline + role diagnostics.
+        # With no baseline findings there is no useful evidence to show, so the
+        # timeout propagates as a clean, role-tagged error (handled upstream).
+        if not baseline_findings:
+            raise
+        report = _timeout_human_review_report(
+            "red_team_generation", red_to, baseline_results, business_context_text
+        )
+        report.metadata.evidence_basis = "deterministic_baseline"
+        report.metadata.red_team_status = "failed"
+        return report
     except (SchemaContractError, ValidationError) as red_exc:
         red_team_status = "failed"
         red_excerpt = getattr(red_exc, "raw_excerpt", None) or sanitize_excerpt(
@@ -403,9 +536,10 @@ def _run_agent_assisted(
         semantic_judge_status = "used"
     judge_failed = False
     judge_excerpt: Optional[str] = None
+    judge_timeout_diag: Optional[dict] = None
 
     def _maybe_apply_judge(results_in: list[ProbeResult]) -> list[ProbeResult]:
-        nonlocal judge_failed, judge_excerpt, semantic_judge_status
+        nonlocal judge_failed, judge_excerpt, semantic_judge_status, judge_timeout_diag
         # Skip when the run already degraded (red fallback) or the judge has
         # already failed once this run — never retry a broken contract.
         if continued_after_red_failure or judge_failed:
@@ -414,6 +548,15 @@ def _run_agent_assisted(
             return _apply_semantic_judge(
                 judge, probes, results_in, current_policy, current_prompt
             )
+        except (RoleTimeoutError, RoleProviderError) as exc:
+            # The judge only SUPPLEMENTS — a judge timeout DEGRADES (drop the
+            # supplement, keep deterministic + valid red-team evidence, continue
+            # to tuning). Record role-aware (non-fatal) timeout diagnostics.
+            judge_failed = True
+            semantic_judge_status = "failed"
+            judge_timeout_diag = exc.diagnostics()
+            judge_excerpt = _timeout_message(judge_timeout_diag)
+            return results_in
         except (SchemaContractError, ValidationError) as exc:
             # DEGRADE: drop the (unusable) semantic supplement, keep the
             # deterministic + valid red-team evidence, and continue to tuning.
@@ -424,10 +567,43 @@ def _run_agent_assisted(
             )
             return results_in
 
+    def _stamp_fallback(report: ReadinessReport) -> None:
+        """Stamp tuning-fallback telemetry + the (recovered) original timeout."""
+        if not tuning_fallback_state.get("used"):
+            return
+        m = report.metadata
+        m.tuning_fallback_used = True
+        m.tuning_fallback_original_model = tuning_fallback_state.get("original_model")
+        m.tuning_fallback_model = tuning_fallback_state.get("fallback_model")
+        m.tuning_fallback_reason = tuning_fallback_state.get("reason")
+        # The original timeout is NEVER hidden — record it (non-fatal here because
+        # the fallback recovered) unless a fatal timeout already owns these fields.
+        diag = tuning_fallback_state.get("original_diag")
+        if diag and not m.timeout_fatal:
+            m.timeout_failed_role = diag.get("failed_role")
+            m.timeout_failed_stage = "policy_tuning"
+            m.timeout_provider_type = diag.get("provider_type")
+            m.timeout_model = diag.get("model")
+            m.timeout_seconds = diag.get("timeout_seconds")
+            m.timeout_retry_count = diag.get("retry_count", 0)
+            m.timeout_message = _timeout_message(diag)
+            m.timeout_fatal = False
+
     def _stamp(report: ReadinessReport) -> ReadinessReport:
         report.metadata.semantic_judge_status = semantic_judge_status
         report.metadata.semantic_judge_failure_excerpt = judge_excerpt
         report.metadata.evidence_basis = evidence_basis
+        # A non-fatal judge timeout is recorded (without overwriting a fatal one).
+        if judge_timeout_diag is not None and not report.metadata.timeout_fatal:
+            report.metadata.timeout_failed_role = judge_timeout_diag.get("failed_role")
+            report.metadata.timeout_failed_stage = "semantic_judge"
+            report.metadata.timeout_provider_type = judge_timeout_diag.get("provider_type")
+            report.metadata.timeout_model = judge_timeout_diag.get("model")
+            report.metadata.timeout_seconds = judge_timeout_diag.get("timeout_seconds")
+            report.metadata.timeout_retry_count = judge_timeout_diag.get("retry_count", 0)
+            report.metadata.timeout_message = _timeout_message(judge_timeout_diag)
+            report.metadata.timeout_fatal = False
+        _stamp_fallback(report)
         return report
 
     # From here, an unrecoverable TUNING/PATCH schema failure routes to
@@ -453,8 +629,28 @@ def _run_agent_assisted(
             if not findings:
                 break
             # 8-9. Propose + validate PatchSet (agent never applies patches).
+            # On a tuning TIMEOUT, fall back ONCE to the configured fallback model
+            # (recorded honestly) before giving up.
             stage = "policy_tuning"
-            patch_set = tuner.propose_patches(findings, current_policy, current_prompt)
+            try:
+                patch_set = tuner.propose_patches(findings, current_policy, current_prompt)
+            except (RoleTimeoutError, RoleProviderError) as tune_to:
+                if fallback_tuner is None:
+                    raise
+                tuning_fallback_state.update(
+                    {
+                        "used": True,
+                        "original_model": tuning_model,
+                        "fallback_model": tuning_fallback_model,
+                        "reason": "timeout",
+                        "original_diag": tune_to.diagnostics(),
+                    }
+                )
+                # One bounded attempt with the fallback model; if IT times out the
+                # error propagates to the timeout handler (baseline preserved).
+                patch_set = fallback_tuner.propose_patches(
+                    findings, current_policy, current_prompt
+                )
             # 8b. Evidence lineage: bind each proposed op to the finding(s) it
             # addresses. Ops with no safe lineage are NOT applied — they are
             # recorded as rejected/unlinked proposals (never counted as
@@ -499,14 +695,25 @@ def _run_agent_assisted(
         )
         return _stamp(report)
 
+    except (RoleTimeoutError, RoleProviderError) as to_exc:
+        # 13a. An unrecoverable TUNING TIMEOUT (incl. a failed fallback) routes to
+        # HUMAN_REVIEW_REQUIRED with the baseline + prior-stage trace preserved.
+        # No patch is faked, no PASS is faked.
+        report = _timeout_human_review_report(
+            stage, to_exc, before_results, business_context_text
+        )
+        report.metadata.red_team_status = red_team_status
+        _stamp_red_fallback(report.metadata, report_ctx)
+        return _stamp(report)
+
     except (SchemaContractError, ValidationError) as exc:
-        # 13. Any unrecoverable TUNING/PATCH schema failure -> HUMAN_REVIEW_REQUIRED.
+        # 13b. Any unrecoverable TUNING/PATCH schema failure -> HUMAN_REVIEW_REQUIRED.
         # A ValidationError here can only come from validating an LLM-proposed
         # patch's effect (the deterministic baseline never raises one); it is
         # converted to a fail-safe partial report rather than crashing the run.
         # Genuine programming errors (other exception types) are NOT swallowed.
-        return _stamp(
-            _human_review_report(
-                stage, exc, before_results, business_context_text, fallback_ctx=report_ctx
-            )
+        report = _human_review_report(
+            stage, exc, before_results, business_context_text, fallback_ctx=report_ctx
         )
+        report.metadata.red_team_status = red_team_status
+        return _stamp(report)

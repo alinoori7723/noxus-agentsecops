@@ -234,8 +234,12 @@ def test_is_frontend_route_rejects_file_like_and_unknown(path):
     assert api_core.is_frontend_route(path) is False
 
 
-def test_agent_assisted_run_does_not_echo_key_on_provider_failure():
-    # Unreachable endpoint -> ProviderError -> ApiError(502), key never surfaced.
+def test_agent_assisted_run_does_not_echo_key_on_provider_failure(monkeypatch):
+    # Unreachable endpoint -> transient network error. With the deterministic
+    # baseline preserved this now returns a partial HUMAN_REVIEW_REQUIRED report
+    # (Fix 5) instead of a hard failure; the api_key must NEVER surface anywhere.
+    monkeypatch.setenv("NOXUS_LLM_MAX_RETRIES", "0")  # keep the test fast
+    monkeypatch.setenv("NOXUS_LLM_RETRY_BACKOFF_SECONDS", "0")
     cfg = api_core.ProviderConfig(
         provider_type="openai_compatible",
         base_url="http://127.0.0.1:9/v1",
@@ -252,9 +256,16 @@ def test_agent_assisted_run_does_not_echo_key_on_provider_failure():
         business_context=s["business_context"],
         provider_config=cfg,
     )
-    with pytest.raises(api_core.ApiError) as exc:
-        api_core.run_assessment(req)
-    assert _SENTINEL_KEY not in exc.value.message
+    try:
+        _report, resp = api_core.run_assessment(req)
+    except api_core.ApiError as exc:
+        # If it DOES raise (e.g. no baseline evidence), the key still must not leak.
+        assert _SENTINEL_KEY not in exc.message
+        assert _SENTINEL_KEY not in json.dumps(exc.details)
+        return
+    # Partial report path: baseline preserved, role-tagged timeout, no key leak.
+    assert resp["readiness_state"] == "HUMAN_REVIEW_REQUIRED"
+    assert _SENTINEL_KEY not in json.dumps(resp)
 
 
 def test_agent_assisted_with_fake_provider_preserves_semantics():

@@ -22,7 +22,7 @@ from typing import Any, Callable, Optional, TypeVar
 from pydantic import BaseModel, ValidationError
 
 from .errors import SchemaContractError
-from .llm_provider import LLMProvider, ProviderError
+from .llm_provider import LLMProvider, ProviderError, ProviderTimeoutError
 
 # ``SchemaContractError`` now lives in ``noxus.errors`` (so the deterministic
 # patch engine need not import this JSON/agent parsing layer). It is imported
@@ -254,6 +254,12 @@ def repair_json_once(
                 f"Output must be a JSON object valid for schema {target_schema_name}."
             ),
         )
+    except ProviderTimeoutError:
+        # A timed-out (or role-attributed timeout) repair is a TRANSIENT provider
+        # failure, not a schema-contract failure — let it propagate so the
+        # orchestrator routes it through the timeout path (with role diagnostics)
+        # instead of mislabeling it as a schema validation error.
+        raise
     except ProviderError as exc:
         raise SchemaContractError(
             f"Repair attempt for '{target_schema_name}' failed at provider: {exc}",

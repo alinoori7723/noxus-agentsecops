@@ -8,6 +8,9 @@ import type {
   RedTeamFailure,
   ReportSummary,
   SchemaFailure,
+  TimeoutFailure,
+  TuningFallback,
+  ProviderTestResponse as _ProviderTestResponse,
 } from "../types/noxus";
 
 // Agent-assisted run where the Red Team Agent failed schema validation but the
@@ -27,6 +30,10 @@ export const agentTracePartialFailure: AgentTrace = {
   baseline_finding_count: 6,
   evidence_basis: "deterministic_baseline",
   semantic_judge_status: null,
+  timeout_failed_role: null,
+  timeout_fatal: false,
+  tuning_fallback_used: false,
+  tuning_fallback_model: null,
   stages: [
     { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Generated structured probes — failed schema validation." },
     { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "not_used", summary: "Not reached — an earlier agent stage failed." },
@@ -52,6 +59,10 @@ export const agentTraceRedFallbackContinued: AgentTrace = {
   baseline_finding_count: 6,
   evidence_basis: "degraded_fallback",
   semantic_judge_status: "skipped",
+  timeout_failed_role: null,
+  timeout_fatal: false,
+  tuning_fallback_used: false,
+  tuning_fallback_model: null,
   stages: [
     { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Generated probes failed schema validation — continued using deterministic baseline evidence." },
     { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "skipped", summary: "Skipped — ran on deterministic baseline evidence after the Red Team Agent failed." },
@@ -99,6 +110,10 @@ export const deterministicTrace: AgentTrace = {
   baseline_finding_count: 6,
   evidence_basis: "deterministic_baseline",
   semantic_judge_status: null,
+  timeout_failed_role: null,
+  timeout_fatal: false,
+  tuning_fallback_used: false,
+  tuning_fallback_model: null,
   stages: [
     {
       stage: "red_team",
@@ -154,6 +169,10 @@ export const agentTrace: AgentTrace = {
   baseline_finding_count: 6,
   evidence_basis: "red_team_augmented",
   semantic_judge_status: "used",
+  timeout_failed_role: null,
+  timeout_fatal: false,
+  tuning_fallback_used: false,
+  tuning_fallback_model: null,
   stages: [
     {
       stage: "red_team",
@@ -212,6 +231,10 @@ export const agentTraceJudgeDegraded: AgentTrace = {
   baseline_finding_count: 8,
   evidence_basis: "red_team_augmented",
   semantic_judge_status: "failed",
+  timeout_failed_role: null,
+  timeout_fatal: false,
+  tuning_fallback_used: false,
+  tuning_fallback_model: null,
   stages: [
     { stage: "red_team", role: "red", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "used", summary: "Generated structured probes on top of the deterministic baseline." },
     { stage: "semantic_judge", role: "judge", model: "gemini-3.5-flash", provider_type: "gemini_native", source: "llm", status: "failed", summary: "Evaluated semantic violations — failed schema validation; continued on deterministic evidence (no semantic findings fabricated)." },
@@ -225,9 +248,9 @@ export const providerTestSuccess: ProviderTestResponse = {
   provider_type: "gemini_native",
   checked_at_utc: "2026-06-01T12:00:00+00:00",
   results: [
-    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: true, latency_ms: 142, response_validated: true, message: "Connected and returned a valid red schema contract.", debug_excerpt: null },
-    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: true, latency_ms: 138, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null },
-    { role: "tuning", purpose: "Proposes schema-bound patches", model: "gemini-3.1-pro-preview", ok: true, latency_ms: 210, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null },
+    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: true, latency_ms: 142, response_validated: true, message: "Connected and returned a valid red schema contract.", debug_excerpt: null, error_type: null, timed_out: false },
+    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: true, latency_ms: 138, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null, error_type: null, timed_out: false },
+    { role: "tuning", purpose: "Proposes schema-bound patches", model: "gemini-3.1-pro-preview", ok: true, latency_ms: 210, response_validated: true, message: "Connected and returned a valid structured response.", debug_excerpt: null, error_type: null, timed_out: false },
   ],
 };
 
@@ -236,7 +259,7 @@ export const providerTestFailure: ProviderTestResponse = {
   provider_type: "openai_compatible",
   checked_at_utc: "2026-06-01T12:00:00+00:00",
   results: [
-    { role: "red", purpose: "Generates adversarial probes", model: "m1", ok: false, latency_ms: 24, response_validated: false, message: "Provider responded, but output did not satisfy the red schema contract.", debug_excerpt: "{\"noxus_provider_check\": true}" },
+    { role: "red", purpose: "Generates adversarial probes", model: "m1", ok: false, latency_ms: 24, response_validated: false, message: "Provider responded, but output did not satisfy the red schema contract.", debug_excerpt: "{\"noxus_provider_check\": true}", error_type: "schema", timed_out: false },
   ],
 };
 
@@ -615,6 +638,39 @@ export const redBlueZeroAfterScore: RedBlueModel = {
     blocking_explanation:
       "Patches were applied, but blocking findings remained in retest. Noxus refused to mark this target safe.",
   },
+};
+
+// A fatal Policy-Tuning timeout (role-specific diagnostics; baseline preserved).
+export const tuningTimeoutFailure: TimeoutFailure = {
+  failed_role: "tuning",
+  role_label: "Policy Tuning Agent",
+  failed_stage: "policy_tuning",
+  provider_type: "gemini_native",
+  model: "gemini-3.1-pro-preview",
+  timeout_seconds: 240,
+  retry_count: 2,
+  message:
+    "LLM request timed out during Policy Tuning Agent using gemini-3.1-pro-preview (timeout 240s, 2 retries).",
+  fatal: true,
+};
+
+// A recovered tuning timeout: the fallback model was used (non-fatal).
+export const recoveredTuningFallback: TuningFallback = {
+  used: true,
+  original_model: "gemini-3.1-pro-preview",
+  fallback_model: "gemini-3.5-flash",
+  reason: "timeout",
+};
+
+// Provider diagnostics where the Red role TIMED OUT (distinct from schema fail).
+export const providerTestTimeout: _ProviderTestResponse = {
+  ok: false,
+  provider_type: "gemini_native",
+  checked_at_utc: "2026-06-01T12:00:00+00:00",
+  results: [
+    { role: "red", purpose: "Generates adversarial probes", model: "gemini-3.5-flash", ok: false, latency_ms: 60012, response_validated: false, message: "Provider call for red timed out after 60s.", debug_excerpt: null, error_type: "timeout", timed_out: true },
+    { role: "judge", purpose: "Reviews semantic violations", model: "gemini-3.5-flash", ok: false, latency_ms: 31, response_validated: false, message: "Provider responded, but output did not satisfy the judge schema contract.", debug_excerpt: "{\"not\":\"valid\"}", error_type: "schema", timed_out: false },
+  ],
 };
 
 // Judge-safe top-level report summary: supported findings resolved, proprietary

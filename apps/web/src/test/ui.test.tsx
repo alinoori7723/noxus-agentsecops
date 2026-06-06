@@ -660,3 +660,53 @@ describe("ReportSummary judge-safe summary (Fix 4)", () => {
     expect(screen.getByText(/5 resolved finding/i)).toBeInTheDocument();
   });
 });
+
+import { TimeoutNotice } from "../components/TimeoutNotice";
+import {
+  tuningTimeoutFailure,
+  recoveredTuningFallback,
+  providerTestTimeout,
+} from "./fixtures";
+
+describe("TimeoutNotice role-specific LLM timeout (Fix 1 & 4)", () => {
+  it("ui_renders_role_specific_timeout_message", () => {
+    render(<TimeoutNotice failure={tuningTimeoutFailure} fallback={null} />);
+    expect(
+      screen.getByText(/timed out during Policy Tuning Agent using gemini-3.1-pro-preview/i),
+    ).toBeInTheDocument();
+    // Role, model, and retry count are surfaced (no generic-only message).
+    expect(screen.getAllByText(/Policy Tuning Agent/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Retries: 2/)).toBeInTheDocument();
+  });
+
+  it("renders the tuning fallback note (fallback does not hide the timeout)", () => {
+    render(
+      <TimeoutNotice failure={null} fallback={recoveredTuningFallback} />,
+    );
+    expect(
+      screen.getByText(/timed out on/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("gemini-3.1-pro-preview")).toBeInTheDocument();
+    expect(screen.getByText("gemini-3.5-flash")).toBeInTheDocument();
+  });
+
+  it("renders nothing when there is no timeout or fallback", () => {
+    const { container } = render(<TimeoutNotice failure={null} fallback={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+});
+
+describe("Provider diagnostics timeout vs schema failure (Fix 6)", () => {
+  it("provider_test_distinguishes_timeout_from_schema_failure_in_ui", () => {
+    render(
+      <ProviderHarness
+        type="gemini_native"
+        testState={{ status: "done", response: providerTestTimeout, error: null, stale: false }}
+      />,
+    );
+    // The timed-out role shows a distinct "timed out" chip, not "schema failed".
+    expect(screen.getAllByText(/^timed out$/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/schema contract failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/timed out after 60s/i)).toBeInTheDocument();
+  });
+});

@@ -23,6 +23,32 @@ class ProviderError(Exception):
     """Raised when an LLM provider fails to return a usable response."""
 
 
+class ProviderTimeoutError(ProviderError):
+    """A TRANSIENT timeout contacting the provider (socket/read timeout).
+
+    Distinct from other provider errors because it is safe to RETRY with backoff
+    (the request never produced a usable answer). Role-aware timeout diagnostics
+    subclass this so a timed-out repair attempt is never mistaken for a schema
+    contract failure.
+    """
+
+
+class ProviderNetworkError(ProviderError):
+    """A TRANSIENT network error reaching the provider (connection reset, DNS, etc.).
+
+    Like a timeout, retrying with backoff is reasonable — no usable answer was
+    produced and the failure is not a deterministic rejection of the request.
+    """
+
+
+class ProviderAuthError(ProviderError):
+    """A NON-transient authentication/authorization failure (HTTP 401/403).
+
+    Retrying cannot help (the credential is rejected), so callers must NOT retry.
+    The message is built from the status only — never the request body or key.
+    """
+
+
 @runtime_checkable
 class LLMProvider(Protocol):
     """Minimal schema-agnostic provider interface.
@@ -102,11 +128,21 @@ class LiteLLMProvider:
             with urllib.request.urlopen(request, timeout=effective_timeout) as resp:
                 body = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise ProviderAuthError(
+                    f"Authentication failed at LLM endpoint: {exc.code} {exc.reason}"
+                ) from exc
             raise ProviderError(f"HTTP error from LLM endpoint: {exc.code} {exc.reason}") from exc
         except urllib.error.URLError as exc:
-            raise ProviderError(f"Network error contacting LLM endpoint: {exc.reason}") from exc
+            # A read/connect timeout can surface as URLError(reason=socket.timeout)
+            # in addition to a bare socket.timeout — treat both as retryable.
+            if isinstance(getattr(exc, "reason", None), socket.timeout):
+                raise ProviderTimeoutError("LLM request timed out.") from exc
+            raise ProviderNetworkError(
+                f"Network error contacting LLM endpoint: {exc.reason}"
+            ) from exc
         except socket.timeout as exc:
-            raise ProviderError("LLM request timed out.") from exc
+            raise ProviderTimeoutError("LLM request timed out.") from exc
 
         try:
             parsed = json.loads(body)
@@ -180,15 +216,21 @@ class GeminiNativeProvider:
         except urllib.error.HTTPError as exc:
             # Never include the response body (could echo request content); just
             # the status. Avoids leaking anything sensitive into error surfaces.
+            if exc.code in (401, 403):
+                raise ProviderAuthError(
+                    f"Authentication failed at Gemini endpoint: {exc.code} {exc.reason}"
+                ) from exc
             raise ProviderError(
                 f"HTTP error from Gemini endpoint: {exc.code} {exc.reason}"
             ) from exc
         except urllib.error.URLError as exc:
-            raise ProviderError(
+            if isinstance(getattr(exc, "reason", None), socket.timeout):
+                raise ProviderTimeoutError("Gemini request timed out.") from exc
+            raise ProviderNetworkError(
                 f"Network error contacting Gemini endpoint: {exc.reason}"
             ) from exc
         except socket.timeout as exc:
-            raise ProviderError("Gemini request timed out.") from exc
+            raise ProviderTimeoutError("Gemini request timed out.") from exc
 
         try:
             parsed = json.loads(body)

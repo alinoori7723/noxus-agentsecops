@@ -296,6 +296,26 @@ class ReportMetadata(BaseModel):
     # Count of LLM-proposed patch operations rejected for missing evidence lineage
     # (never applied, never counted as remediation).
     rejected_proposal_count: int = 0
+    # Presentation-only LLM TIMEOUT diagnostics (never affect scoring/readiness).
+    # Set whenever a role's provider call timed out (fatally -> HUMAN_REVIEW, or
+    # non-fatally e.g. a degraded judge). All values are safe to surface: no API
+    # key, no request body. ``timeout_message`` is secret-redacted.
+    timeout_failed_role: Optional[str] = None
+    timeout_failed_stage: Optional[str] = None
+    timeout_provider_type: Optional[str] = None
+    timeout_model: Optional[str] = None
+    timeout_seconds: Optional[float] = None
+    timeout_retry_count: int = 0
+    timeout_message: Optional[str] = None
+    # True when the timeout caused the run to route to HUMAN_REVIEW_REQUIRED
+    # (vs a non-fatal degrade such as a judge supplement timing out).
+    timeout_fatal: bool = False
+    # Optional Policy-Tuning fallback-model telemetry (Fix 4). Recorded honestly
+    # so a fallback is NEVER silently hidden; the original timeout stays visible.
+    tuning_fallback_used: bool = False
+    tuning_fallback_original_model: Optional[str] = None
+    tuning_fallback_model: Optional[str] = None
+    tuning_fallback_reason: Optional[str] = None
 
 
 class ReadinessReport(BaseModel):

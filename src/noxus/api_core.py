@@ -28,6 +28,14 @@ from .llm_provider import (
     LiteLLMProvider,
     LLMProvider,
     ProviderError,
+    ProviderTimeoutError,
+)
+from .llm_runtime import (
+    ROLE_LABEL,
+    RoleProviderError,
+    RoleTimeoutError,
+    TimeoutConfig,
+    tuning_fallback_model_from_env,
 )
 from .orchestrator import run_readiness_assessment
 from .policy_loader import validate_policy
@@ -70,9 +78,6 @@ ROLE_PURPOSE = {
     "judge": "Reviews semantic violations",
     "tuning": "Proposes schema-bound patches",
 }
-
-# Short timeout for the per-role provider connectivity/contract probe.
-PROVIDER_TEST_TIMEOUT = 12.0
 
 
 class ApiError(Exception):
@@ -402,7 +407,18 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
     continued_after_red = bool(getattr(meta, "continued_after_red_failure", False))
     fallback_used = getattr(meta, "fallback_used", None)
     fallback_reason = getattr(meta, "fallback_reason", None)
-    red_failed = is_agent and (
+    # LLM timeout telemetry. A FATAL timeout routes to HUMAN_REVIEW_REQUIRED and
+    # is rendered like a pipeline failure (failing role -> "failed", with a
+    # timeout-specific summary); a non-fatal timeout (degraded judge / recovered
+    # tuning fallback) is surfaced without failing the whole pipeline.
+    timeout_role = getattr(meta, "timeout_failed_role", None)
+    timeout_fatal = is_agent and bool(getattr(meta, "timeout_fatal", False))
+    timeout_message = getattr(meta, "timeout_message", None)
+    tuning_fallback_used = bool(getattr(meta, "tuning_fallback_used", False))
+    tuning_fallback_model = getattr(meta, "tuning_fallback_model", None)
+    # A red/tuning timeout sets red_team_status; do NOT route it through the
+    # schema-failure red block (which has schema-specific wording).
+    red_failed = is_agent and not timeout_fatal and (
         red_team_status == "failed" or (schema_failure and failed_role == "red")
     )
     # Semantic-Judge resilience telemetry: the judge may have FAILED its schema
@@ -413,13 +429,21 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
     # Role pipeline order: red -> judge -> tuning. On a schema failure, the failing
     # role is "failed", earlier roles "used" (they completed), later roles "not_used".
     _ROLE_ORDER = {"red": 0, "judge": 1, "tuning": 2}
-    failed_idx = _ROLE_ORDER.get(failed_role) if schema_failure else None
+    pipeline_failed = schema_failure or timeout_fatal
+    # A fatal timeout attributes the failure to its timeout_role; a schema failure
+    # to failed_role.
+    failing_role = timeout_role if timeout_fatal else failed_role
+    failed_idx = _ROLE_ORDER.get(failing_role) if pipeline_failed else None
 
     def _agent_status(role: str, default_used: bool, default_not_used_summary: str,
                       used_summary: str) -> dict:
         idx = _ROLE_ORDER[role]
         if failed_idx is not None:
             if idx == failed_idx:
+                if timeout_fatal:
+                    return {"source": "llm", "status": "failed",
+                            "summary": timeout_message
+                            or f"{used_summary.split('.')[0]} — timed out."}
                 return {"source": "llm", "status": "failed",
                         "summary": f"{used_summary.split('.')[0]} — failed schema validation."}
             if idx < failed_idx:
@@ -498,7 +522,9 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
                 "source": "llm",
                 "status": "failed",
                 "summary": (
-                    "Evaluated semantic violations — failed schema validation; "
+                    timeout_message + " Continued on deterministic evidence."
+                    if (timeout_role == "judge" and not timeout_fatal and timeout_message)
+                    else "Evaluated semantic violations — failed schema validation; "
                     "continued on deterministic evidence (no semantic findings "
                     "fabricated)."
                 ),
@@ -515,6 +541,13 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
             "Proposed no patches.",
             f"Proposed a schema-bound PatchSet ({patch_count} operations).",
         )
+        # If the primary tuning model timed out but a fallback recovered, say so
+        # honestly (the original timeout is never hidden).
+        if tuning_fallback_used and tuning.get("status") == "used":
+            tuning["summary"] = (
+                f"Policy Tuning Agent timed out on {_model('tuning')}; fallback "
+                f"model {tuning_fallback_model} was used. {tuning['summary']}"
+            )
     else:
         red = {
             "source": "deterministic_baseline",
@@ -558,6 +591,11 @@ def build_agent_trace(report, mode: str, provider_config) -> dict:
         # semantic-judge resilience status (so a degraded run is never silent).
         "evidence_basis": evidence_basis,
         "semantic_judge_status": semantic_judge_status,
+        # Timeout/fallback resilience trace (presentation-only; never a secret).
+        "timeout_failed_role": timeout_role,
+        "timeout_fatal": timeout_fatal,
+        "tuning_fallback_used": tuning_fallback_used,
+        "tuning_fallback_model": tuning_fallback_model if tuning_fallback_used else None,
         "stages": stages,
     }
 
@@ -625,6 +663,32 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
             # Sanitized (<=500 chars, secrets redacted) by json_contracts.
             "debug_excerpt": getattr(meta, "semantic_judge_failure_excerpt", None),
         }
+    # LLM TIMEOUT diagnostics (presentation-only). Present whenever a role's
+    # provider call timed out — fatally (-> HUMAN_REVIEW_REQUIRED) or non-fatally
+    # (a degraded judge supplement, or a tuning timeout recovered by fallback).
+    # Carries NO api key and NO request body — only safe role/model diagnostics.
+    timeout_failure = None
+    if getattr(meta, "timeout_failed_role", None):
+        timeout_failure = {
+            "failed_role": meta.timeout_failed_role,
+            "role_label": ROLE_LABEL.get(meta.timeout_failed_role, "LLM Agent"),
+            "failed_stage": getattr(meta, "timeout_failed_stage", None),
+            "provider_type": getattr(meta, "timeout_provider_type", None),
+            "model": getattr(meta, "timeout_model", None),
+            "timeout_seconds": getattr(meta, "timeout_seconds", None),
+            "retry_count": getattr(meta, "timeout_retry_count", 0),
+            "message": getattr(meta, "timeout_message", None),
+            "fatal": bool(getattr(meta, "timeout_fatal", False)),
+        }
+    # Policy-Tuning fallback-model telemetry (Fix 4) — never silently hidden.
+    tuning_fallback = None
+    if getattr(meta, "tuning_fallback_used", False):
+        tuning_fallback = {
+            "used": True,
+            "original_model": getattr(meta, "tuning_fallback_original_model", None),
+            "fallback_model": getattr(meta, "tuning_fallback_model", None),
+            "reason": getattr(meta, "tuning_fallback_reason", None),
+        }
     # Non-breaking, top-level SUMMARY ALIASES. These are a flat convenience view
     # derived ENTIRELY from the same real report object (no new semantics, no
     # scoring change, no API key/provider config). The nested
@@ -671,6 +735,8 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "schema_failure": schema_failure,
         "red_team_failure": red_team_failure,
         "semantic_judge_failure": semantic_judge_failure,
+        "timeout_failure": timeout_failure,
+        "tuning_fallback": tuning_fallback,
         "metadata": {
             "mode": effective_mode,
             "tuning_iterations": getattr(report.metadata, "tuning_iterations", 0),
@@ -712,6 +778,8 @@ def run_assessment(req: RunAssessmentRequest):
 
     # agent_assisted
     provider, models = build_provider(req.provider_config)
+    timeout_config = TimeoutConfig.from_env()
+    tuning_fallback_model = tuning_fallback_model_from_env()
     try:
         report = run_readiness_assessment(
             system_prompt=req.system_prompt,
@@ -719,13 +787,71 @@ def run_assessment(req: RunAssessmentRequest):
             business_context_text=req.business_context,
             mode="agent_assisted",
             provider=provider,
+            timeout_config=timeout_config,
+            tuning_fallback_model=tuning_fallback_model,
+            provider_type=req.provider_config.provider_type,
             **models,
         )
+    except RoleTimeoutError as exc:
+        # A role TIMEOUT with no usable baseline evidence to preserve — return a
+        # clean, role-tagged error (HTTP 504). Never echo the key/request body.
+        raise _timeout_api_error(exc) from exc
+    except RoleProviderError as exc:
+        # A non-transient, role-attributed provider failure (e.g. auth) with no
+        # baseline evidence to preserve.
+        raise _role_provider_api_error(exc) from exc
     except ProviderError as exc:
-        # Endpoint/network/provider failure — surface a safe message (no key).
+        # Any other endpoint/network/provider failure — safe message (no key).
         raise ApiError(502, f"LLM provider error: {exc}") from exc
     return report, build_assessment_response(
         report, mode="agent_assisted", provider_config=req.provider_config
+    )
+
+
+def _timeout_diag_details(exc) -> dict:
+    """Safe, structured role diagnostics for a timeout/provider error (no secrets)."""
+    diag = exc.diagnostics()
+    return {
+        "failed_role": diag["failed_role"],
+        "role_label": diag["role_label"],
+        "failed_stage": diag["failed_role"],
+        "provider": diag["provider_type"],
+        "model": diag["model"],
+        "timeout_seconds": diag["timeout_seconds"],
+        "retry_count": diag["retry_count"],
+        "message": diag["message"],
+    }
+
+
+def role_timeout_message(diag: dict) -> str:
+    """Build the user-facing role-specific timeout message (no secrets)."""
+    label = ROLE_LABEL.get(diag.get("failed_role"), "LLM Agent")
+    model = diag.get("model") or "the configured model"
+    retries = diag.get("retry_count", 0)
+    return (
+        f"LLM request timed out during {label} using {model} "
+        f"(retried {retries} time(s))."
+    )
+
+
+def _timeout_api_error(exc: "RoleTimeoutError") -> "ApiError":
+    diag = exc.diagnostics()
+    return ApiError(
+        504,
+        role_timeout_message(diag),
+        code="llm_timeout",
+        details=_timeout_diag_details(exc),
+    )
+
+
+def _role_provider_api_error(exc: "RoleProviderError") -> "ApiError":
+    diag = exc.diagnostics()
+    label = diag["role_label"]
+    return ApiError(
+        502,
+        f"LLM provider error during {label} using {diag.get('model')}.",
+        code="llm_provider_error",
+        details=_timeout_diag_details(exc),
     )
 
 
@@ -734,9 +860,14 @@ def run_assessment(req: RunAssessmentRequest):
 # agents enforce (not just a generic JSON ping), so a "success" here predicts a
 # real agent-assisted run.
 # --------------------------------------------------------------------------- #
-def _role_contract_check(provider, model, role):
-    """Probe one role against its REAL agent schema. Returns a result tuple
-    (ok, response_validated, message, debug_excerpt)."""
+def _role_contract_check(provider, model, role, timeout):
+    """Probe one role against its REAL agent schema under a SHORT timeout.
+
+    Returns ``(ok, response_validated, message, debug_excerpt, error_type)`` where
+    ``error_type`` is one of ``None`` (ok), ``"timeout"``, ``"schema"``, or
+    ``"provider_error"`` — so the UI can report a TIMEOUT distinctly from a schema
+    contract failure. The api_key is never echoed; excerpts are secret-redacted.
+    """
     from .agents import ROLE_CONTRACTS
     from .errors import SchemaContractError
     from .json_contracts import load_validated_object, sanitize_excerpt
@@ -748,12 +879,18 @@ def _role_contract_check(provider, model, role):
             system_prompt=contract["system_prompt"],
             user_prompt=contract["test_instruction"],
             json_schema_instruction=f"Return a {contract['schema_name']} JSON object.",
-            timeout=PROVIDER_TEST_TIMEOUT,
+            timeout=timeout,
+        )
+    except ProviderTimeoutError:
+        return (
+            False, False,
+            f"Provider call for {role} timed out after {timeout:.0f}s.",
+            None, "timeout",
         )
     except ProviderError as exc:
-        return False, False, f"Provider call failed: {exc}", None
+        return False, False, f"Provider call failed: {sanitize_excerpt(str(exc))}", None, "provider_error"
     except Exception:  # never leak internals
-        return False, False, "Provider call failed: unexpected error.", None
+        return False, False, "Provider call failed: unexpected error.", None, "provider_error"
 
     try:
         load_validated_object(
@@ -766,25 +903,29 @@ def _role_contract_check(provider, model, role):
             normalize=contract["normalize"],
         )
         return (
-            True,
-            True,
+            True, True,
             f"Connected and returned a valid {role} schema contract.",
-            None,
+            None, None,
+        )
+    except ProviderTimeoutError:
+        # The repair attempt timed out — report it as a timeout, not a schema fail.
+        return (
+            False, False,
+            f"Provider call for {role} timed out after {timeout:.0f}s.",
+            None, "timeout",
         )
     except SchemaContractError as exc:
         excerpt = getattr(exc, "raw_excerpt", None) or sanitize_excerpt(raw)
         return (
-            False,
-            False,
+            False, False,
             f"Provider responded, but output did not satisfy the {role} schema contract.",
-            excerpt,
+            excerpt, "schema",
         )
     except Exception:
         return (
-            False,
-            False,
+            False, False,
             f"Provider responded, but output did not satisfy the {role} schema contract.",
-            sanitize_excerpt(raw),
+            sanitize_excerpt(raw), "schema",
         )
 
 
@@ -793,10 +934,11 @@ def test_provider(provider_config, models_to_test=None) -> dict:
 
     Proves the provider/model can produce output that satisfies the SAME Pydantic
     contracts the agents enforce — WITHOUT running an assessment, mutating any
-    prompt/policy, or writing audit files. Generic JSON that fails the role
-    contract is reported as a failure (not a false success). The API key is used
-    only in memory and never echoed, logged, or returned. Failures carry a short,
-    secret-redacted ``debug_excerpt``.
+    prompt/policy, or writing audit files. A per-role TIMEOUT is reported
+    distinctly from a schema-contract failure (``error_type``), and each role
+    carries its ``latency_ms``. The API key is used only in memory and never
+    echoed, logged, or returned. Failures carry a short, secret-redacted
+    ``debug_excerpt``.
     """
     roles = list(models_to_test) if models_to_test else list(AGENT_ROLES)
     unknown = [r for r in roles if r not in AGENT_ROLES]
@@ -808,13 +950,28 @@ def test_provider(provider_config, models_to_test=None) -> dict:
     # Builds the provider (raises ApiError(400) on missing key / invalid config).
     provider, models = build_provider(provider_config)
     provider_type = provider_config.provider_type
+    # The connectivity probe uses the SHORT provider-test timeout (default 60s),
+    # never the long agent timeouts — and fails FAST (no retry): a diagnostic must
+    # tell the user quickly whether the provider works, not stall on backoff.
+    test_timeout = TimeoutConfig.from_env().provider_test
+    from .llm_runtime import RoleBoundProvider
 
     results = []
     overall_ok = True
     for role in roles:
         model = models[ROLE_MODEL_KEY[role]]
+        probe_provider = RoleBoundProvider(
+            provider,
+            role="provider_test",
+            provider_type=provider_type,
+            timeout=test_timeout,
+            max_retries=0,
+            backoff_seconds=0.0,
+        )
         start = time.perf_counter()
-        ok, validated, message, excerpt = _role_contract_check(provider, model, role)
+        ok, validated, message, excerpt, error_type = _role_contract_check(
+            probe_provider, model, role, test_timeout
+        )
         latency_ms = int((time.perf_counter() - start) * 1000)
         overall_ok = overall_ok and ok
         results.append(
@@ -827,6 +984,9 @@ def test_provider(provider_config, models_to_test=None) -> dict:
                 "response_validated": validated,
                 "message": message,
                 "debug_excerpt": excerpt,
+                # Distinguishes a TIMEOUT from a schema-contract failure (or None).
+                "error_type": error_type,
+                "timed_out": error_type == "timeout",
             }
         )
 
