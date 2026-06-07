@@ -1,0 +1,20 @@
+ Dockerfile                                        |   2 [32m+[m[31m-[m
+ README.md                                         |  12 [32m+[m[31m-[m
+ apps/web/src/components/EngineeringSafeguards.tsx |   2 [32m+[m[31m-[m
+ apps/web/src/components/RedBlueDashboard.tsx      |  45 [32m++[m[31m-[m
+ apps/web/src/components/TopHeader.tsx             |   4 [32m+[m[31m-[m
+ apps/web/src/test/fixtures.ts                     |  66 [32m++++[m[31m-[m
+ apps/web/src/test/ui.test.tsx                     |  65 [32m++++[m[31m-[m
+ apps/web/src/types/noxus.ts                       |  37 [32m++[m[31m-[m
+ docs/challenge-application-draft.md               |   2 [32m+[m[31m-[m
+ docs/demo-script.md                               |   2 [32m+[m[31m-[m
+ docs/submission-checklist.md                      |  42 [32m++[m[31m-[m
+ scripts/final_release_validate.sh                 |  80 [32m++++++[m
+ src/noxus/api_core.py                             |   9 [32m+[m
+ src/noxus/remediation.py                          | 298 [32m+++++++++++++++++[m[31m--[m
+ src/noxus/ui_formatters.py                        |  84 [32m++++[m[31m--[m
+ tests/test_edge_final.py                          | 220 [32m++++++++++++++[m
+ tests/test_final_reporting.py                     | 527 [32m++++++++++++++++++++++++++++++++++[m
+ tests/test_kpi_lineage_final.py                   |   4 [32m+[m[31m-[m
+ tests/test_release_validation_docs.py             |  92 [32m++++++[m
+ 19 files changed, 1500 insertions(+), 93 deletions(-)

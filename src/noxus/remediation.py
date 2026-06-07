@@ -30,6 +30,16 @@ from .schemas import (
 
 _HIGH_SEVERITY = {Severity.high, Severity.critical}
 
+# Severity ordering for the security-aware primary-lineage tie-breaker (higher is
+# more severe). Used to prefer the highest-severity matching finding before
+# falling back to a deterministic sorted id.
+_SEVERITY_ORDER = {
+    Severity.low: 1,
+    Severity.medium: 2,
+    Severity.high: 3,
+    Severity.critical: 4,
+}
+
 # Specific-domain finding types. A patch whose target/effect domain is one of
 # these maps PRIMARILY to that finding type — it must never be re-attributed to
 # the generic ``must_not_appear_violation`` merely because that finding
@@ -45,11 +55,67 @@ _SPECIFIC_DOMAIN_FINDING_TYPES = {
 # causally related to the primary (same family) for "Related findings" display.
 _FINDING_TYPE_FAMILY = {
     "indirect_prompt_injection_simulated": "prompt_injection",
+    "indirect_prompt_injection": "prompt_injection",
     "pii_leakage": "pii",
     "fake_secret_exfiltration": "secrets",
     "customer_identifier_leakage": "customer_identifier",
+    "proprietary_context_exposure": "proprietary_context",
     "must_not_appear_violation": "proprietary_context",
 }
+
+# Explicit, ordered keyword table used to infer a patch's TARGET/EFFECT DOMAIN
+# from its (presentation-safe) fields. Order matters: the first domain whose
+# keywords match wins. This drives deterministic primary-lineage selection.
+_PATCH_DOMAIN_KEYWORDS = (
+    ("prompt_injection", ("prompt_injection", "indirect_injection", "indirect",
+                          "injection", "untrusted", "override prior")),
+    ("pii", ("pii", "personal data", "personal_data", "email", "phone")),
+    ("secrets", ("secret", "api_key", "api key", "token", "credential")),
+    ("customer_identifier", ("customer_identifier", "customer_id", "ticket_id",
+                             "internal_ticket", "account_id", "customer")),
+    ("proprietary_context", ("proprietary", "confidential", "internal_context",
+                             "business_context")),
+)
+
+# The patch domains that have a dedicated, specific finding type. A patch in one
+# of these domains is NEVER attributed to the generic must_not_appear_violation
+# when its specific finding type is available.
+_SPECIFIC_PATCH_DOMAINS = {"prompt_injection", "pii", "secrets", "customer_identifier"}
+
+# Per-domain ordered precedence of the finding types a patch principally
+# remediates. The first type present in the matched findings becomes primary.
+_DOMAIN_PRIMARY_PRECEDENCE = {
+    "prompt_injection": ["indirect_prompt_injection_simulated",
+                         "indirect_prompt_injection"],
+    "pii": ["pii_leakage"],
+    "secrets": ["fake_secret_exfiltration"],
+    "customer_identifier": ["customer_identifier_leakage"],
+    "proprietary_context": ["proprietary_context_exposure",
+                            "must_not_appear_violation"],
+    "generic_policy": ["must_not_appear_violation"],
+}
+
+
+def patch_domain(op: PatchOperation) -> str:
+    """Infer a patch's target/effect domain from its presentation-safe fields.
+
+    Pure keyword classification over the allowed operation/field vocabulary —
+    deterministic and additive (never changes patch application semantics).
+    """
+    operation = getattr(op.operation, "value", op.operation)
+    blob = " ".join(
+        str(x)
+        for x in (
+            op.target, op.path, operation, op.mask_type, op.block_type,
+            op.category, op.control, op.constraint, op.clause_id, op.heading,
+            op.content, op.value, op.source_finding,
+        )
+        if x is not None
+    ).lower()
+    for domain, keywords in _PATCH_DOMAIN_KEYWORDS:
+        if any(k in blob for k in keywords):
+            return domain
+    return "generic_policy"
 
 # Probe-type -> deterministic human-review category (used as a fallback when the
 # finding_type is not one of the well-known deterministic markers, e.g. semantic
@@ -246,31 +312,34 @@ def patch_primary_finding_type(op: PatchOperation) -> Optional[str]:
 
 
 def _select_primary_finding_type(
-    intended: Optional[str], finding_types: list[str]
+    op: PatchOperation, finding_types: list[str]
 ) -> Optional[str]:
-    """Choose the PRIMARY finding type from the patch domain, not co-occurrence.
+    """Choose the PRIMARY finding type by the patch's DOMAIN, deterministically.
 
-    Rules (deterministic):
-    1. The patch's own intended domain wins when it is actually among the matched
-       findings.
-    2. Otherwise a specific-domain finding (pii/secret/customer/injection) is
-       preferred over the generic ``must_not_appear_violation`` — the generic
-       finding is never chosen merely because it sorts first alphabetically or
-       happened to co-occur.
-    3. If no specific-domain finding was matched but the patch's own domain IS
-       specific, attribute to that domain (e.g. a PII patch linked only via a
-       cited proprietary probe must not be labeled ``must_not_appear_violation``).
-    4. Only a generic / proprietary-context control falls back to the (generic)
-       matched finding as its primary.
+    Rules (in order):
+    1. Walk the patch domain's precedence list; the first finding type present in
+       the matched findings is primary.
+    2. Otherwise prefer ANY matched specific-domain finding (pii/secret/customer/
+       injection) over the generic ``must_not_appear_violation`` — sorted for
+       determinism.
+    3. If still nothing and the patch's own domain is specific, attribute to that
+       domain's canonical finding type (so a PII patch linked only via a cited
+       proprietary probe is labeled pii_leakage, never must_not_appear_violation).
+    4. A generic / proprietary-context control falls back to the matched finding.
+
+    ``must_not_appear_violation`` is therefore never primary for a PII/secret/
+    customer patch whenever the specific finding type exists.
     """
-    if intended and intended in finding_types:
-        return intended
-    specifics = [t for t in finding_types if t in _SPECIFIC_DOMAIN_FINDING_TYPES]
+    domain = patch_domain(op)
+    for preferred in _DOMAIN_PRIMARY_PRECEDENCE.get(domain, []):
+        if preferred in finding_types:
+            return preferred
+    specifics = sorted(t for t in finding_types if t in _SPECIFIC_DOMAIN_FINDING_TYPES)
     if specifics:
         return specifics[0]
-    if intended in _SPECIFIC_DOMAIN_FINDING_TYPES:
-        return intended
-    return finding_types[0] if finding_types else intended
+    if domain in _SPECIFIC_PATCH_DOMAINS:
+        return _DOMAIN_PRIMARY_PRECEDENCE[domain][0]
+    return finding_types[0] if finding_types else op.source_finding
 
 
 def attach_patch_lineage(
@@ -312,14 +381,27 @@ def attach_patch_lineage(
         probe_ids = sorted({f.probe_id for f in matched})
         finding_ids = sorted({f"{f.probe_id}:{f.finding_type}" for f in matched})
         # PRIMARY target: the precise finding type this op principally remediates,
-        # constrained to a type actually present in the matched findings; else the
-        # first matched type. The primary probe is a matched probe of that type.
-        primary_type = _select_primary_finding_type(
-            patch_primary_finding_type(op), finding_types
-        )
-        primary_probe = next(
-            (f.probe_id for f in matched if f.finding_type == primary_type), probe_ids[0]
-        )
+        # selected by the patch DOMAIN (not alphabetical/co-occurrence order).
+        primary_type = _select_primary_finding_type(op, finding_types)
+        # PRIMARY probe tie-breaker (security-aware) over the matched findings of
+        # the primary type, in strict order:
+        #   1. a probe the op explicitly cites;
+        #   2. highest severity among the domain candidates;
+        #   3. deterministic sorted probe id — FINAL fallback only, after the
+        #      domain/cited-probe/severity criteria above have all tied.
+        cited_probes = set(op.source_probe_ids)
+        candidates = [f for f in matched if f.finding_type == primary_type]
+        if candidates:
+            primary_probe = min(
+                candidates,
+                key=lambda f: (
+                    0 if f.probe_id in cited_probes else 1,
+                    -_SEVERITY_ORDER.get(f.severity, 0),
+                    f.probe_id,
+                ),
+            ).probe_id
+        else:
+            primary_probe = probe_ids[0]
         primary_id = f"{primary_probe}:{primary_type}"
         secondary_ids = [fid for fid in finding_ids if fid != primary_id]
         linked.append(
@@ -467,6 +549,164 @@ def related_secondary_finding_ids(op: PatchOperation) -> list[str]:
         elif primary_family and _finding_type_family(finding_type) == primary_family:
             related.append(fid)
     return related
+
+
+def classify_related_findings(op: PatchOperation) -> dict:
+    """Group secondary findings into CAUSAL/DOMAIN buckets for clean display.
+
+    Returns a dict with three ordered, de-duplicated id lists:
+
+    * ``same_category_related``   — same category family as the primary;
+    * ``leakage_from_same_probe`` — different family but the SAME probe id as the
+      primary (e.g. customer-identifier leakage emitted by the same prompt-
+      injection probe);
+    * ``generic_policy_related``  — only when the patch domain is generic_policy
+      or proprietary_context.
+
+    Unrelated cross-domain findings (different family AND different probe, on a
+    specific-domain patch) are intentionally OMITTED from every bucket — they are
+    never shown as generic "related findings" (they remain in the raw
+    ``secondary_source_finding_ids`` audit list).
+    """
+    primary_probe = op.primary_source_probe_id
+    primary_family = _finding_type_family(op.primary_source_finding_type)
+    domain = patch_domain(op)
+    same_category: list[str] = []
+    same_probe: list[str] = []
+    generic: list[str] = []
+    for fid in op.secondary_source_finding_ids:
+        probe, finding_type = _split_finding_id(fid)
+        family = _finding_type_family(finding_type)
+        if primary_family and family == primary_family:
+            same_category.append(fid)
+        elif primary_probe and probe == primary_probe:
+            same_probe.append(fid)
+        elif domain in ("generic_policy", "proprietary_context"):
+            generic.append(fid)
+        # else: unrelated cross-domain finding -> omitted from display.
+    return {
+        "same_category_related": same_category,
+        "leakage_from_same_probe": same_probe,
+        "generic_policy_related": generic,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Unresolved-finding INSTANCE accounting (every instance must be represented)
+# --------------------------------------------------------------------------- #
+def unresolved_finding_instances(after_results: list[ProbeResult]) -> list[dict]:
+    """Enumerate every unresolved retest finding INSTANCE with a stable id.
+
+    One probe may emit multiple findings; each is a distinct *instance*. The
+    instance id is deterministic: ``{probe_id}:{finding_type}#{global_index}``.
+    """
+    instances: list[dict] = []
+    index = 0
+    for result in after_results:
+        for finding in result.findings:
+            instances.append(
+                {
+                    "instance_id": f"{finding.probe_id}:{finding.finding_type}#{index}",
+                    "finding_type": finding.finding_type,
+                    "probe_id": finding.probe_id,
+                    "severity": _value_severity(finding.severity),
+                    "category": finding_category(finding),
+                }
+            )
+            index += 1
+    return instances
+
+
+def _value_severity(severity) -> str:
+    return getattr(severity, "value", None) or str(severity)
+
+
+def route_unresolved_instances(
+    after_results: list[ProbeResult], final_categories: list[str]
+) -> dict:
+    """Route EVERY unresolved finding instance into exactly one bucket.
+
+    Buckets:
+    * ``human_review_derivation``     — per-category rows (instance ids + types +
+      probes) for instances whose category is in the final human-review list;
+    * ``unresolved_not_human_reviewed`` — instances with no mapped/final category,
+      each carrying an explicit ``reason`` so nothing silently disappears.
+
+    Also returns the instance/type counts so the report can assert consistency.
+    """
+    instances = unresolved_finding_instances(after_results)
+    final = set(final_categories)
+    by_cat: dict[str, dict] = {}
+    not_reviewed: list[dict] = []
+    for inst in instances:
+        category = inst["category"]
+        if category and category in final:
+            row = by_cat.setdefault(
+                category,
+                {"instance_ids": [], "types": set(), "probes": set()},
+            )
+            row["instance_ids"].append(inst["instance_id"])
+            row["types"].add(inst["finding_type"])
+            row["probes"].add(inst["probe_id"])
+        else:
+            reason = (
+                "No human-review category maps to this finding type."
+                if not category
+                else (
+                    f"Category {category!r} is not in the final human-review list."
+                )
+            )
+            not_reviewed.append({**inst, "reason": reason})
+
+    derivation: list[dict] = []
+    for category in sorted(final):
+        row = by_cat.get(category)
+        if row:
+            types = sorted(row["types"])
+            probes = sorted(row["probes"])
+            derivation.append(
+                {
+                    "category": category,
+                    "derived_from_finding_instance_ids": sorted(row["instance_ids"]),
+                    "derived_from_finding_types": types,
+                    "derived_from_probe_ids": probes,
+                    "source": "derived_from_retest",
+                    "reason": (
+                        f"Derived from {len(row['instance_ids'])} unresolved retest "
+                        f"finding instance(s) across {len(probes)} probe(s): "
+                        f"{', '.join(types)}."
+                    ),
+                }
+            )
+        else:
+            derivation.append(
+                {
+                    "category": category,
+                    "derived_from_finding_instance_ids": [],
+                    "derived_from_finding_types": [],
+                    "derived_from_probe_ids": [],
+                    "source": "proposed_by_agent",
+                    "reason": (
+                        "Proposed by the tuning agent; no unresolved retest finding "
+                        "currently supports it."
+                    ),
+                }
+            )
+
+    routed_instance_ids = [
+        fid for row in derivation for fid in row["derived_from_finding_instance_ids"]
+    ]
+    routed_types = sorted(
+        {t for row in derivation for t in row["derived_from_finding_types"]}
+    )
+    return {
+        "unresolved_finding_instances": instances,
+        "unresolved_finding_types": sorted({i["finding_type"] for i in instances}),
+        "human_review_derivation": derivation,
+        "unresolved_not_human_reviewed": not_reviewed,
+        "human_review_derived_finding_instance_count": len(routed_instance_ids),
+        "human_review_derived_finding_type_count": len(routed_types),
+    }
 
 
 # --------------------------------------------------------------------------- #

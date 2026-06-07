@@ -16,14 +16,50 @@ git tag --list
 
 ## Tests
 
-- [ ] Full suite green (release verification: **475 Python tests** with dev extras installed).
-- [ ] Frontend tests green (**60 frontend tests**).
+- [ ] Full suite green (release verification: **526 Python tests** with dev extras installed).
+- [ ] Frontend tests green (**63 frontend tests**).
+
+### Canonical release validation
+
+Canonical release validation uses a clean virtual environment with
+`pip install -e '.[dev]'`. The dev extras (e.g. httpx for the FastAPI test
+client) are required for the full suite, so this clean-venv count is the
+authoritative release count. Host `pytest` is a quick local check only — when
+optional dev extras are missing it reports **fewer** tests, so the host count is
+not the canonical release count.
+
+The whole flow is scripted in `scripts/final_release_validate.sh` (clean venv +
+dev extras → pytest → frontend `npm ci`/build/test → docker build → `/api/health`
+and `/api/proof` smoke → traversal 404 checks). It needs no provider credentials,
+writes no secrets, and removes its temporary venv/node_modules/dist on exit.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"
-.venv/bin/pytest -q          # release-verified at 475 Python tests (httpx from dev extras)
+.venv/bin/pytest -q          # release-verified at 526 Python tests (httpx from dev extras)
 cd apps/web && npm ci && npm run test && cd -
+# or, end-to-end:
+bash scripts/final_release_validate.sh
 ```
+
+### Safe Docker smoke port
+
+The smoke step uses a dedicated, named smoke container (`noxus-edge-smoke`) and
+never stops an unknown/existing demo container. It prefers the default demo port
+**8787**; when 8787 is already busy it falls back to the alternate smoke port
+**8877** and reports that instead of stopping whatever is already running.
+
+### Legacy score field presentation aliases (technical debt note)
+
+`before_score` and `after_score` are **legacy internal numeric readiness fields**
+(0–100, higher is safer). They are kept for API/computation stability and must
+NOT be renamed.
+
+The canonical user-facing labels are `Baseline readiness score` and
+`Readiness gate score` (surfaced via the additive presentation aliases
+`baseline_readiness_score_label` / `readiness_gate_score_label`). Do not label
+these higher-is-better scores as a "risk score" in any future UI/API
+presentation; remaining risk is shown qualitatively (`qualitative_risk_level`)
+and via failed probes / unresolved findings / human-review requirements.
 
 ## Docker
 

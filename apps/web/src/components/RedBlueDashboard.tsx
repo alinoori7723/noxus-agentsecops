@@ -72,11 +72,27 @@ function PatchCard({ patch }: { patch: PatchRow }) {
           {patch.primary_source_label}
         </span>
       </p>
-      {patch.related_source_finding_ids.length > 0 && (
+      {patch.related_finding_groups.same_category_related.length > 0 && (
         <p className="mt-0.5 text-[11px] text-slate-400">
-          Related findings:{" "}
+          Related findings from same category:{" "}
           <span className="font-mono text-slate-500">
-            {patch.related_source_finding_ids.join(", ")}
+            {patch.related_finding_groups.same_category_related.join(", ")}
+          </span>
+        </p>
+      )}
+      {patch.related_finding_groups.leakage_from_same_probe.length > 0 && (
+        <p className="mt-0.5 text-[11px] text-slate-400">
+          Leakage from same probe:{" "}
+          <span className="font-mono text-slate-500">
+            {patch.related_finding_groups.leakage_from_same_probe.join(", ")}
+          </span>
+        </p>
+      )}
+      {patch.related_finding_groups.generic_policy_related.length > 0 && (
+        <p className="mt-0.5 text-[11px] text-slate-400">
+          Generic policy-related finding:{" "}
+          <span className="font-mono text-slate-500">
+            {patch.related_finding_groups.generic_policy_related.join(", ")}
           </span>
         </p>
       )}
@@ -208,10 +224,10 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
             )}
 
             <div className="kicker flex items-center gap-1.5 pt-1">
-              <Wrench size={13} /> Probe / finding mapping
+              <Wrench size={13} /> Probe / finding mapping matrix
             </div>
             <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-[12px] text-slate-600">
-              <p className="leading-relaxed">{rem.probe_finding_mapping.explanation}</p>
+              <p className="leading-relaxed">{rem.probe_finding_mapping.note}</p>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <StatusChip
                   label={`Baseline: ${rem.probe_finding_mapping.baseline_label}`}
@@ -225,7 +241,26 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
                   label={rem.probe_finding_mapping.resolved_label}
                   color="green"
                 />
+                <StatusChip
+                  label={`Unresolved types: ${
+                    rem.probe_finding_mapping.unresolved_finding_types.join(", ") || "none"
+                  }`}
+                  color="neutral"
+                />
               </div>
+              <p className="mt-2 text-[11px] text-slate-500">
+                Human review accounts for{" "}
+                {rem.human_review_derived_finding_instance_count} unresolved finding
+                instance(s) across {rem.human_review_derived_finding_type_count} finding
+                type(s).
+                {rem.unresolved_not_human_reviewed.length > 0 && (
+                  <>
+                    {" "}
+                    {rem.unresolved_not_human_reviewed.length} unresolved instance(s)
+                    are listed as not human-reviewed with a reason.
+                  </>
+                )}
+              </p>
             </div>
 
             <div className="kicker flex items-center gap-1.5 pt-1">

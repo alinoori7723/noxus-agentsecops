@@ -99,9 +99,9 @@ _DETECTION_COLORS = {
 # Readiness-score direction copy. The readiness score is a DEPLOYABILITY score
 # where HIGHER is safer — it is never a "risk score" (where 0 would mean no risk).
 READINESS_SCORE_EXPLANATION = (
-    "Readiness score measures deployability. Higher is safer. Risk is shown "
-    "separately through failed probes, unresolved findings, and human-review "
-    "categories."
+    "Readiness score measures deployability. Higher is safer. Risk is "
+    "represented separately by failed probes, unresolved findings, and "
+    "human-review requirements."
 )
 BASELINE_READINESS_SCORE_LABEL = "Baseline readiness score"
 
@@ -242,11 +242,17 @@ def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
     # PRIMARY lineage is highlighted first; the rest is secondary/audit detail.
     primary_type = op.primary_source_finding_type
     primary_probe = op.primary_source_probe_id
+    primary_id = (
+        f"{primary_probe}:{primary_type}" if primary_probe and primary_type else None
+    )
     primary_label = (
-        f"{primary_probe}:{primary_type}"
-        if primary_probe and primary_type
+        primary_id
+        if primary_id
         else (primary_type or remediation.patch_lineage_label(op))
     )
+    # Related findings classified into causal/domain buckets (Fix 4); unrelated
+    # cross-domain co-occurrences are omitted from display.
+    related_groups = remediation.classify_related_findings(op)
     # Status is computed from the PRIMARY target (not broad secondary links).
     status = remediation.patch_status(op, unresolved_finding_types)
     return {
@@ -259,12 +265,15 @@ def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
         "source_finding_types": source_types,
         "primary_source_finding_type": primary_type,
         "primary_source_probe_id": primary_probe,
+        "primary_source_finding_id": primary_id,
         "primary_source_label": primary_label,
         "secondary_source_finding_ids": list(op.secondary_source_finding_ids),
         # "Related findings" = the SUBSET of secondary links that are causally
         # related to the primary (same probe chain / category family). Unrelated
         # cross-domain co-occurrences are NOT presented as direct sources.
         "related_source_finding_ids": remediation.related_secondary_finding_ids(op),
+        # Causal/domain-labeled related-finding groups (Fix 4).
+        "related_finding_groups": related_groups,
         "source_label": remediation.patch_lineage_label(op),
         "status": status,
         "is_safety_rail": op.operation is PatchOp.insert_or_update_critical_safety_rail,
@@ -506,25 +515,39 @@ def build_remediation_model(report) -> dict:
         "retest_finding_count": after_summary["findings"],
         "resolved_finding_count": resolved_finding_count,
         "unresolved_finding_count": unresolved_finding_count,
+        # Instance-named aliases (Fix 5): a finding INSTANCE is one emitted finding;
+        # one probe may emit several. Remediation progress is counted by instances.
+        "baseline_finding_instance_count": before_summary["findings"],
+        "retest_finding_instance_count": after_summary["findings"],
+        "resolved_finding_instance_count": resolved_finding_count,
+        "unresolved_finding_instance_count": after_summary["findings"],
+        "unresolved_finding_types": sorted(unresolved_types),
         "baseline_label": (
             f"{before_summary['failed_probes']} failed probes -> "
-            f"{before_summary['findings']} findings"
+            f"{before_summary['findings']} finding instances"
         ),
         "retest_label": (
             f"{after_summary['failed_probes']} failed probes -> "
-            f"{after_summary['findings']} findings"
+            f"{after_summary['findings']} unresolved finding instances"
         ),
-        "resolved_label": f"{resolved_finding_count} findings resolved",
+        "resolved_label": f"{resolved_finding_count} finding instances resolved",
+        "note": (
+            "One probe may emit multiple findings. Remediation progress is "
+            "counted by finding instances; human review is grouped by unresolved "
+            "finding categories."
+        ),
     }
-    # Readiness GATE state (Fix 5): when the gate stays BLOCKED even though the
-    # score improved, say so explicitly and name the blocking finding types — a
-    # positive delta is partial improvement, never a PASS.
+    # Readiness GATE state (Fix 6): when readiness IMPROVED but the final gate is
+    # still not PASS (BLOCKED / CONDITIONAL / HUMAN_REVIEW_REQUIRED), say so
+    # explicitly and name the blocking finding types — a positive delta is partial
+    # improvement, never a PASS.
     gate = readiness_gate(report.readiness_state)
     score_delta = report.after_score - report.before_score
+    is_pass = report.readiness_state is ReadinessState.PASS
     gate_blocking_finding_types = sorted(unresolved_types)
     gate_blocked_explanation = ""
     gate_blocking_reason = ""
-    if gate == "BLOCKED":
+    if not is_pass:
         reason_items = gate_blocking_finding_types or list(
             report.human_review_requirements
         )
@@ -533,13 +556,15 @@ def build_remediation_model(report) -> dict:
         if score_delta > 0:
             gate_blocked_explanation = (
                 "Readiness improved, but deployment remains blocked because "
-                "unsupported high-risk findings remain."
+                "unresolved high-risk findings remain."
             )
-    # Human-review derivation: every final category tied to the unresolved retest
-    # finding types/probe ids that support it (or flagged proposed_by_agent).
-    human_review_derivation = remediation.derive_human_review_mapping(
-        list(report.human_review_requirements), report.after_results
+    # Human-review routing: EVERY unresolved retest finding INSTANCE is routed to
+    # either a human-review category or an explicit non-review bucket — nothing is
+    # silently dropped (Fix 2).
+    routing = remediation.route_unresolved_instances(
+        report.after_results, list(report.human_review_requirements)
     )
+    human_review_derivation = routing["human_review_derivation"]
     return {
         "patch_application_count": patch_count,
         "patched_policy_effective": getattr(meta, "patched_policy_effective", False),
@@ -557,6 +582,16 @@ def build_remediation_model(report) -> dict:
         "unresolved_findings": unresolved_findings,
         "human_review_categories": list(report.human_review_requirements),
         "human_review_derivation": human_review_derivation,
+        # Instance-level unresolved routing (Fix 2): every unresolved finding
+        # instance is accounted for in exactly one bucket.
+        "unresolved_finding_instances": routing["unresolved_finding_instances"],
+        "unresolved_not_human_reviewed": routing["unresolved_not_human_reviewed"],
+        "human_review_derived_finding_instance_count": routing[
+            "human_review_derived_finding_instance_count"
+        ],
+        "human_review_derived_finding_type_count": routing[
+            "human_review_derived_finding_type_count"
+        ],
         # Remediation PROGRESS is reported separately from the readiness gate so
         # the gate score is never read as a measure of patch effectiveness.
         "remediation_progress": {
@@ -745,11 +780,14 @@ def build_readiness_summary_model(report) -> dict:
     risk_level = risk_level_from_results(report.after_results)
     gate = readiness_gate(report.readiness_state)
     score_delta = report.after_score - report.before_score
+    is_pass = report.readiness_state is ReadinessState.PASS
+    # Fix 6: readiness IMPROVED but final state is not PASS (BLOCKED / CONDITIONAL
+    # / HUMAN_REVIEW_REQUIRED) -> partial improvement, never a safe PASS.
     gate_blocked_explanation = ""
-    if gate == "BLOCKED" and score_delta > 0:
+    if not is_pass and score_delta > 0:
         gate_blocked_explanation = (
             "Readiness improved, but deployment remains blocked because "
-            "unsupported high-risk findings remain."
+            "unresolved high-risk findings remain."
         )
     return {
         "badge": format_readiness_badge(report.readiness_state),
@@ -758,6 +796,12 @@ def build_readiness_summary_model(report) -> dict:
         # The baseline score is a READINESS score (higher = safer), never a
         # "risk score" (Fix 1).
         "before_score_label": BASELINE_READINESS_SCORE_LABEL,
+        # Additive, explicitly-named presentation aliases (Fix 1) — internal
+        # score fields (before_score/after_score) are preserved unchanged.
+        "baseline_readiness_score_label": BASELINE_READINESS_SCORE_LABEL,
+        "readiness_gate_score_label": "Readiness gate score",
+        "score_direction_explanation": READINESS_SCORE_EXPLANATION,
+        "qualitative_risk_level": risk_level,
         "after_score": report.after_score,
         "after_score_label": "Readiness gate score",
         "after_score_explanation": after_score_explanation,
@@ -766,7 +810,7 @@ def build_readiness_summary_model(report) -> dict:
         "risk_level": risk_level,
         "risk_level_label": "Risk remaining",
         "risk_color": _RISK_LEVEL_COLORS.get(risk_level, "red"),
-        # Gate-blocked-with-positive-delta copy (Fix 5).
+        # Improvement-but-not-PASS copy (Fix 6).
         "gate_blocked_explanation": gate_blocked_explanation,
         "remediation_progress": {
             "resolved": resolved_finding_count,

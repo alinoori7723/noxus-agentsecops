@@ -725,7 +725,7 @@ describe("ReadinessSummary readiness-score, not risk-score (KPI Fix 1)", () => {
     render(<ReadinessSummary model={conditionalPassSummary} />);
     expect(screen.getByText(/Higher is safer/i)).toBeInTheDocument();
     expect(
-      screen.getByText(/Risk is shown separately/i),
+      screen.getByText(/Risk is represented separately/i),
     ).toBeInTheDocument();
   });
 });
@@ -739,30 +739,75 @@ describe("RedBlueDashboard related findings + probe mapping (KPI Fix 3 & 4)", ()
         patches: [
           {
             ...redBlueWithRealRail.blue.patches[0],
-            related_source_finding_ids: [
-              "probe_indirect_prompt_injection:indirect_prompt_injection_simulated",
-            ],
+            related_finding_groups: {
+              same_category_related: [
+                "probe_indirect_prompt_injection:indirect_prompt_injection",
+              ],
+              leakage_from_same_probe: [],
+              generic_policy_related: [],
+            },
           },
         ],
       },
     };
     render(<RedBlueDashboard model={model} />);
-    expect(screen.getByText(/Related findings:/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Related findings from same category:/i),
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Secondary sources/i)).not.toBeInTheDocument();
   });
 
-  it("ui_shows_probe_to_finding_mapping", () => {
+  it("ui_related_findings_labels_are_causal_not_generic", () => {
+    const model = {
+      ...redBlueWithRealRail,
+      blue: {
+        ...redBlueWithRealRail.blue,
+        patches: [
+          {
+            ...redBlueWithRealRail.blue.patches[0],
+            related_finding_groups: {
+              same_category_related: [],
+              leakage_from_same_probe: [
+                "probe_indirect_prompt_injection:customer_identifier_leakage",
+              ],
+              generic_policy_related: [],
+            },
+          },
+        ],
+      },
+    };
+    render(<RedBlueDashboard model={model} />);
+    // Causal label, not a generic "related findings" dump.
+    expect(screen.getByText(/Leakage from same probe:/i)).toBeInTheDocument();
+  });
+
+  it("ui_shows_probe_finding_mapping_matrix", () => {
     render(<RedBlueDashboard model={redBlueWithRealRail} />);
-    expect(screen.getByText(/Probe \/ finding mapping/i)).toBeInTheDocument();
+    expect(screen.getByText(/Probe \/ finding mapping matrix/i)).toBeInTheDocument();
     expect(
       screen.getByText(/one probe may emit multiple findings/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Baseline: 5 failed probes -> 6 findings/i),
+      screen.getByText(/Baseline: 5 failed probes -> 6 finding instances/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Retest: 1 failed probes -> 1 findings/i),
+      screen.getByText(/Retest: 1 failed probes -> 1 unresolved finding instances/i),
     ).toBeInTheDocument();
+  });
+
+  it("ui_does_not_say_findings_when_it_means_finding_types", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    // The matrix distinguishes finding INSTANCES from finding TYPES.
+    expect(screen.getByText(/finding type\(s\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/Unresolved types:/i)).toBeInTheDocument();
+  });
+});
+
+describe("ReadinessSummary higher-is-better is not a risk score (final reporting)", () => {
+  it("no_risk_score_label_for_higher_is_better_score", () => {
+    render(<ReadinessSummary model={conditionalPassSummary} />);
+    expect(screen.queryByText(/risk score/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Baseline readiness score")).toBeInTheDocument();
   });
 });
 
@@ -771,7 +816,7 @@ describe("RedBlueDashboard BLOCKED gate + positive delta (KPI Fix 5)", () => {
     render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
     expect(
       screen.getByText(
-        /Readiness improved, but deployment remains blocked because unsupported high-risk findings remain/i,
+        /Readiness improved, but deployment remains blocked because unresolved high-risk findings remain/i,
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(/Gate remains blocked/i)).toBeInTheDocument();

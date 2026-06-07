@@ -125,8 +125,8 @@ def test_report_summary_explains_readiness_score_direction():
     explanation = model["readiness_score_explanation"].lower()
     assert "higher is safer" in explanation
     assert "deployability" in explanation
-    # Risk is described as shown separately, not as the score itself.
-    assert "risk is shown separately" in explanation
+    # Risk is described as represented separately, not as the score itself.
+    assert "risk is represented separately" in explanation
 
 
 def test_score_zero_with_failed_probes_not_labeled_low_risk():

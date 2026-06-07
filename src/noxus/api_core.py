@@ -716,11 +716,20 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         # findings, so probe and finding counts differ. Exposed flatly so the
         # report can explain the difference.
         "baseline_probe_count": len(report.before_results),
+        "baseline_failed_probe_count": sum(
+            1 for r in report.before_results if not r.passed
+        ),
         "baseline_finding_count": baseline_findings,
+        # Instance-named aliases (Fix 2 & 5) — a finding instance is one emitted
+        # finding; one probe may emit several.
+        "baseline_finding_instance_count": baseline_findings,
         "retest_failed_probe_count": sum(
             1 for r in report.after_results if not r.passed
         ),
         "retest_finding_count": after_finding_count,
+        "retest_finding_instance_count": after_finding_count,
+        "resolved_finding_instance_count": getattr(rmeta, "resolved_finding_count", 0),
+        "unresolved_finding_instance_count": after_finding_count,
         "patched_policy_effective": getattr(rmeta, "patched_policy_effective", False),
         "patched_system_prompt_effective": getattr(
             rmeta, "patched_system_prompt_effective", False

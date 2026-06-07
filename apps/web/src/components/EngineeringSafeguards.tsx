@@ -57,7 +57,7 @@ const STATIC_SAFEGUARDS: { title: string; detail: string; icon: LucideIcon }[] =
     icon: LayoutPanelTop,
   },
   {
-    title: "Release verification: 475 Python + 60 frontend tests",
+    title: "Release verification: 526 Python + 63 frontend tests",
     detail: "Deterministic core, schema-bound agents, API adapter, and UI components are all tested.",
     icon: FlaskConical,
   },

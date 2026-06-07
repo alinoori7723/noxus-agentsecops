@@ -77,6 +77,11 @@ export interface ReadinessSummary {
   before_score: number;
   // The baseline score is a READINESS score (higher = safer), never a risk score.
   before_score_label: string;
+  // Additive, explicitly-named readiness aliases (Fix 1).
+  baseline_readiness_score_label: string;
+  readiness_gate_score_label: string;
+  score_direction_explanation: string;
+  qualitative_risk_level: string;
   after_score: number;
   after_score_label: string;
   after_score_explanation: string;
@@ -158,36 +163,61 @@ export interface PatchRow {
   // PRIMARY lineage is highlighted first; the rest is secondary/audit detail.
   primary_source_finding_type: string | null;
   primary_source_probe_id: string | null;
+  primary_source_finding_id: string | null;
   primary_source_label: string;
   secondary_source_finding_ids: string[];
   // Related findings: the causally-related subset of secondary links (same probe
   // chain / category family). Unrelated cross-domain co-occurrences are excluded.
   related_source_finding_ids: string[];
+  // Causal/domain-labeled related-finding groups (Fix 4).
+  related_finding_groups: RelatedFindingGroups;
   source_label: string;
   status: PatchStatus;
   is_safety_rail: boolean;
 }
 
+export interface RelatedFindingGroups {
+  same_category_related: string[];
+  leakage_from_same_probe: string[];
+  generic_policy_related: string[];
+}
+
 export interface ProbeFindingMapping {
   explanation: string;
+  note: string;
   baseline_probe_count: number;
   baseline_failed_probe_count: number;
   baseline_finding_count: number;
+  baseline_finding_instance_count: number;
   retest_probe_count: number;
   retest_failed_probe_count: number;
   retest_finding_count: number;
+  retest_finding_instance_count: number;
   resolved_finding_count: number;
+  resolved_finding_instance_count: number;
   unresolved_finding_count: number;
+  unresolved_finding_instance_count: number;
+  unresolved_finding_types: string[];
   baseline_label: string;
   retest_label: string;
   resolved_label: string;
 }
 
+export interface UnresolvedFindingInstance {
+  instance_id: string;
+  finding_type: string;
+  probe_id: string;
+  severity: string;
+  category: string | null;
+  reason?: string;
+}
+
 export interface HumanReviewDerivationRow {
   category: string;
+  derived_from_finding_instance_ids?: string[];
   derived_from_finding_types: string[];
   derived_from_probe_ids: string[];
-  source: "derived_from_retest" | "proposed_by_agent";
+  source: "derived_from_retest" | "proposed_by_agent" | "mixed";
   reason: string;
 }
 
@@ -206,6 +236,11 @@ export interface RemediationModel {
   unresolved_findings: FindingRow[];
   human_review_categories: string[];
   human_review_derivation: HumanReviewDerivationRow[];
+  // Instance-level unresolved routing (Fix 2).
+  unresolved_finding_instances: UnresolvedFindingInstance[];
+  unresolved_not_human_reviewed: UnresolvedFindingInstance[];
+  human_review_derived_finding_instance_count: number;
+  human_review_derived_finding_type_count: number;
   remediation_progress: RemediationProgress;
   // Readiness GATE — reported separately from remediation progress.
   readiness_gate: string;
