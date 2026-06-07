@@ -72,11 +72,11 @@ function PatchCard({ patch }: { patch: PatchRow }) {
           {patch.primary_source_label}
         </span>
       </p>
-      {patch.secondary_source_finding_ids.length > 0 && (
+      {patch.related_source_finding_ids.length > 0 && (
         <p className="mt-0.5 text-[11px] text-slate-400">
-          Secondary sources:{" "}
+          Related findings:{" "}
           <span className="font-mono text-slate-500">
-            {patch.secondary_source_finding_ids.join(", ")}
+            {patch.related_source_finding_ids.join(", ")}
           </span>
         </p>
       )}
@@ -192,6 +192,42 @@ export function RedBlueDashboard({ model }: { model: RedBlueModel }) {
                 {rem.after_score_explanation}
               </p>
             )}
+            {rem.gate_blocked_explanation && (
+              <div
+                className="rounded-lg border border-amber-300 bg-amber-50/70 p-3 text-[12px] font-medium text-amber-800"
+                role="note"
+              >
+                <p>{rem.gate_blocked_explanation}</p>
+                <p className="mt-0.5 text-amber-700">Gate remains blocked.</p>
+                {rem.gate_blocking_reason && (
+                  <p className="mt-0.5 font-mono text-[11px] text-amber-700">
+                    {rem.gate_blocking_reason}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <div className="kicker flex items-center gap-1.5 pt-1">
+              <Wrench size={13} /> Probe / finding mapping
+            </div>
+            <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3 text-[12px] text-slate-600">
+              <p className="leading-relaxed">{rem.probe_finding_mapping.explanation}</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <StatusChip
+                  label={`Baseline: ${rem.probe_finding_mapping.baseline_label}`}
+                  color="red"
+                />
+                <StatusChip
+                  label={`Retest: ${rem.probe_finding_mapping.retest_label}`}
+                  color="amber"
+                />
+                <StatusChip
+                  label={rem.probe_finding_mapping.resolved_label}
+                  color="green"
+                />
+              </div>
+            </div>
+
             <div className="kicker flex items-center gap-1.5 pt-1">
               <Wrench size={13} /> Remediation effectiveness
             </div>

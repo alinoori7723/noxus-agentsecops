@@ -30,6 +30,27 @@ from .schemas import (
 
 _HIGH_SEVERITY = {Severity.high, Severity.critical}
 
+# Specific-domain finding types. A patch whose target/effect domain is one of
+# these maps PRIMARILY to that finding type — it must never be re-attributed to
+# the generic ``must_not_appear_violation`` merely because that finding
+# co-occurred (or sorts first alphabetically). See ``_select_primary_finding_type``.
+_SPECIFIC_DOMAIN_FINDING_TYPES = {
+    "pii_leakage",
+    "fake_secret_exfiltration",
+    "customer_identifier_leakage",
+    "indirect_prompt_injection_simulated",
+}
+
+# finding_type -> category family, used to decide whether a SECONDARY finding is
+# causally related to the primary (same family) for "Related findings" display.
+_FINDING_TYPE_FAMILY = {
+    "indirect_prompt_injection_simulated": "prompt_injection",
+    "pii_leakage": "pii",
+    "fake_secret_exfiltration": "secrets",
+    "customer_identifier_leakage": "customer_identifier",
+    "must_not_appear_violation": "proprietary_context",
+}
+
 # Probe-type -> deterministic human-review category (used as a fallback when the
 # finding_type is not one of the well-known deterministic markers, e.g. semantic
 # judge findings).
@@ -224,6 +245,34 @@ def patch_primary_finding_type(op: PatchOperation) -> Optional[str]:
     return op.source_finding
 
 
+def _select_primary_finding_type(
+    intended: Optional[str], finding_types: list[str]
+) -> Optional[str]:
+    """Choose the PRIMARY finding type from the patch domain, not co-occurrence.
+
+    Rules (deterministic):
+    1. The patch's own intended domain wins when it is actually among the matched
+       findings.
+    2. Otherwise a specific-domain finding (pii/secret/customer/injection) is
+       preferred over the generic ``must_not_appear_violation`` — the generic
+       finding is never chosen merely because it sorts first alphabetically or
+       happened to co-occur.
+    3. If no specific-domain finding was matched but the patch's own domain IS
+       specific, attribute to that domain (e.g. a PII patch linked only via a
+       cited proprietary probe must not be labeled ``must_not_appear_violation``).
+    4. Only a generic / proprietary-context control falls back to the (generic)
+       matched finding as its primary.
+    """
+    if intended and intended in finding_types:
+        return intended
+    specifics = [t for t in finding_types if t in _SPECIFIC_DOMAIN_FINDING_TYPES]
+    if specifics:
+        return specifics[0]
+    if intended in _SPECIFIC_DOMAIN_FINDING_TYPES:
+        return intended
+    return finding_types[0] if finding_types else intended
+
+
 def attach_patch_lineage(
     operations: list[PatchOperation], findings: list[Finding]
 ) -> tuple[list[PatchOperation], list[PatchOperation]]:
@@ -265,9 +314,9 @@ def attach_patch_lineage(
         # PRIMARY target: the precise finding type this op principally remediates,
         # constrained to a type actually present in the matched findings; else the
         # first matched type. The primary probe is a matched probe of that type.
-        primary_type = patch_primary_finding_type(op)
-        if primary_type not in finding_types:
-            primary_type = finding_types[0]
+        primary_type = _select_primary_finding_type(
+            patch_primary_finding_type(op), finding_types
+        )
         primary_probe = next(
             (f.probe_id for f in matched if f.finding_type == primary_type), probe_ids[0]
         )
@@ -385,6 +434,39 @@ def patch_lineage_label(op: PatchOperation) -> str:
     if op.source_finding:
         return op.source_finding
     return "unlinked"
+
+
+def _finding_type_family(finding_type: Optional[str]) -> Optional[str]:
+    if not finding_type:
+        return None
+    return _FINDING_TYPE_FAMILY.get(finding_type, finding_type)
+
+
+def _split_finding_id(finding_id: str) -> tuple[str, str]:
+    probe, _, finding_type = finding_id.partition(":")
+    return probe, finding_type
+
+
+def related_secondary_finding_ids(op: PatchOperation) -> list[str]:
+    """Secondary finding ids that are CAUSALLY related to the primary lineage.
+
+    A secondary finding is "related" only when it shares the primary's causal
+    probe chain (same probe id) or its category family. Unrelated cross-domain
+    co-occurrences — e.g. a customer-identifier finding pulled in beside a
+    prompt-injection primary via a broadly-cited probe — are NOT presented as a
+    related/secondary source (they remain in ``secondary_source_finding_ids`` for
+    the audit trail, but are not shown as direct evidence sources).
+    """
+    primary_probe = op.primary_source_probe_id
+    primary_family = _finding_type_family(op.primary_source_finding_type)
+    related: list[str] = []
+    for fid in op.secondary_source_finding_ids:
+        probe, finding_type = _split_finding_id(fid)
+        if primary_probe and probe == primary_probe:
+            related.append(fid)
+        elif primary_family and _finding_type_family(finding_type) == primary_family:
+            related.append(fid)
+    return related
 
 
 # --------------------------------------------------------------------------- #

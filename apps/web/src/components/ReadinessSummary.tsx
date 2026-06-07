@@ -77,20 +77,29 @@ export function ReadinessSummary({ model }: { model: Summary }) {
           {badge.explanation}
         </p>
         <div className="mt-4 flex flex-wrap gap-2">
+          <StatusChip
+            label={`Risk remaining: ${model.risk_level}`}
+            color={model.risk_color}
+          />
           <StatusChip label={`mode: ${model.mode}`} color="neutral" />
           <StatusChip
             label={`tuning iterations: ${model.tuning_iterations}`}
             color="neutral"
           />
         </div>
+        {model.gate_blocked_explanation && (
+          <p className="mt-3 text-xs font-semibold text-amber-700">
+            {model.gate_blocked_explanation}
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <Metric
-          label="Before risk score"
+          label={model.before_score_label}
           value={`${model.before_score}/100`}
           detail={`${model.before_summary.failed_probes} failed probes`}
-          color={model.before_summary.failed_probes ? "red" : "green"}
+          color={model.before_summary.failed_probes ? "amber" : "green"}
         />
         <Metric
           label={model.after_score_label}
@@ -116,6 +125,9 @@ export function ReadinessSummary({ model }: { model: Summary }) {
           {model.after_score_explanation}
         </p>
       )}
+      <p className="col-span-2 -mt-1 text-xs leading-relaxed text-slate-500">
+        {model.readiness_score_explanation}
+      </p>
     </div>
   );
 }

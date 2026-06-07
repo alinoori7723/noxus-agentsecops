@@ -710,3 +710,72 @@ describe("Provider diagnostics timeout vs schema failure (Fix 6)", () => {
     expect(screen.getByText(/timed out after 60s/i)).toBeInTheDocument();
   });
 });
+
+describe("ReadinessSummary readiness-score, not risk-score (KPI Fix 1)", () => {
+  it("ui_does_not_label_readiness_as_risk_score", () => {
+    render(<ReadinessSummary model={conditionalPassSummary} />);
+    // The baseline higher-is-better score is a READINESS score, not a risk score.
+    expect(screen.getByText("Baseline readiness score")).toBeInTheDocument();
+    expect(screen.queryByText(/risk score/i)).not.toBeInTheDocument();
+    // Remaining risk is shown as a qualitative level, not a 0/100 number.
+    expect(screen.getByText(/Risk remaining: Medium/i)).toBeInTheDocument();
+  });
+
+  it("report_summary_explains_readiness_score_direction", () => {
+    render(<ReadinessSummary model={conditionalPassSummary} />);
+    expect(screen.getByText(/Higher is safer/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Risk is shown separately/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("RedBlueDashboard related findings + probe mapping (KPI Fix 3 & 4)", () => {
+  it("ui_uses_related_findings_not_secondary_sources_for_non_primary_lineage", () => {
+    const model = {
+      ...redBlueWithRealRail,
+      blue: {
+        ...redBlueWithRealRail.blue,
+        patches: [
+          {
+            ...redBlueWithRealRail.blue.patches[0],
+            related_source_finding_ids: [
+              "probe_indirect_prompt_injection:indirect_prompt_injection_simulated",
+            ],
+          },
+        ],
+      },
+    };
+    render(<RedBlueDashboard model={model} />);
+    expect(screen.getByText(/Related findings:/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Secondary sources/i)).not.toBeInTheDocument();
+  });
+
+  it("ui_shows_probe_to_finding_mapping", () => {
+    render(<RedBlueDashboard model={redBlueWithRealRail} />);
+    expect(screen.getByText(/Probe \/ finding mapping/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/one probe may emit multiple findings/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Baseline: 5 failed probes -> 6 findings/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Retest: 1 failed probes -> 1 findings/i),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("RedBlueDashboard BLOCKED gate + positive delta (KPI Fix 5)", () => {
+  it("ui_does_not_present_positive_delta_as_pass", () => {
+    render(<RedBlueDashboard model={redBlueZeroAfterScore} />);
+    expect(
+      screen.getByText(
+        /Readiness improved, but deployment remains blocked because unsupported high-risk findings remain/i,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Gate remains blocked/i)).toBeInTheDocument();
+    // The readiness gate is BLOCKED, never promoted to PASS.
+    expect(screen.queryByText(/\bPASS\b/)).not.toBeInTheDocument();
+  });
+});

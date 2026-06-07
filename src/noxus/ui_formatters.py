@@ -96,6 +96,27 @@ _DETECTION_COLORS = {
     DetectionMode.deterministic.value: "green",
 }
 
+# Readiness-score direction copy. The readiness score is a DEPLOYABILITY score
+# where HIGHER is safer — it is never a "risk score" (where 0 would mean no risk).
+READINESS_SCORE_EXPLANATION = (
+    "Readiness score measures deployability. Higher is safer. Risk is shown "
+    "separately through failed probes, unresolved findings, and human-review "
+    "categories."
+)
+BASELINE_READINESS_SCORE_LABEL = "Baseline readiness score"
+
+# Risk LEVEL (Critical/High/Medium/Low) — the qualitative risk that REMAINS after
+# retest. Shown instead of a misleading numeric "risk score 0/100".
+_SEVERITY_RANK = {"low": 1, "medium": 2, "high": 3, "critical": 4}
+_RANK_RISK_LEVEL = {0: "None", 1: "Low", 2: "Medium", 3: "High", 4: "Critical"}
+_RISK_LEVEL_COLORS = {
+    "Critical": "red",
+    "High": "red",
+    "Medium": "amber",
+    "Low": "green",
+    "None": "green",
+}
+
 # Substring that identifies the (intentionally) unresolved open risk.
 _PROPRIETARY_RISK_KEY = "proprietary_context_exposure"
 _PROPRIETARY_RISK_EXPLANATION = (
@@ -108,6 +129,20 @@ _PROPRIETARY_RISK_EXPLANATION = (
 def _value(maybe_enum) -> str:
     """Return the .value of an enum, or the str of a plain value."""
     return getattr(maybe_enum, "value", None) or str(maybe_enum)
+
+
+def risk_level_from_results(results) -> str:
+    """Return the qualitative risk level (Critical/High/Medium/Low/None).
+
+    Derived from the highest-severity REMAINING finding. A zero readiness score
+    with high-severity findings is therefore "High"/"Critical" risk — never
+    mislabeled "Low" just because the numeric score is 0.
+    """
+    rank = 0
+    for result in results:
+        for finding in result.findings:
+            rank = max(rank, _SEVERITY_RANK.get(_value(finding.severity), 0))
+    return _RANK_RISK_LEVEL[rank]
 
 
 # --------------------------------------------------------------------------- #
@@ -226,6 +261,10 @@ def format_patch_row(patch_operation, unresolved_finding_types=None) -> dict:
         "primary_source_probe_id": primary_probe,
         "primary_source_label": primary_label,
         "secondary_source_finding_ids": list(op.secondary_source_finding_ids),
+        # "Related findings" = the SUBSET of secondary links that are causally
+        # related to the primary (same probe chain / category family). Unrelated
+        # cross-domain co-occurrences are NOT presented as direct sources.
+        "related_source_finding_ids": remediation.related_secondary_finding_ids(op),
         "source_label": remediation.patch_lineage_label(op),
         "status": status,
         "is_safety_rail": op.operation is PatchOp.insert_or_update_critical_safety_rail,
@@ -440,6 +479,7 @@ def build_remediation_model(report) -> dict:
             "human review."
         )
     resolved_finding_count = getattr(meta, "resolved_finding_count", 0)
+    unresolved_finding_count = getattr(meta, "unresolved_finding_count", 0)
     # Score-adjacent explanation: a 0 readiness-gate score with real remediation
     # progress must be explained as a GATE state, not patch ineffectiveness.
     after_score_explanation = ""
@@ -448,6 +488,53 @@ def build_remediation_model(report) -> dict:
             "Readiness remains blocked because high-risk findings remain. "
             "Remediation progress is shown separately."
         )
+    # Probe/finding mapping: one probe can emit multiple findings, so the probe
+    # counts and finding counts legitimately differ. Surface the mapping so the
+    # report explains the difference instead of looking inconsistent.
+    before_summary = summarize_probe_results(report.before_results)
+    after_summary = summarize_probe_results(report.after_results)
+    probe_finding_mapping = {
+        "explanation": (
+            "One probe may emit multiple findings, so probe counts and finding "
+            "counts differ."
+        ),
+        "baseline_probe_count": before_summary["total_probes"],
+        "baseline_failed_probe_count": before_summary["failed_probes"],
+        "baseline_finding_count": before_summary["findings"],
+        "retest_probe_count": after_summary["total_probes"],
+        "retest_failed_probe_count": after_summary["failed_probes"],
+        "retest_finding_count": after_summary["findings"],
+        "resolved_finding_count": resolved_finding_count,
+        "unresolved_finding_count": unresolved_finding_count,
+        "baseline_label": (
+            f"{before_summary['failed_probes']} failed probes -> "
+            f"{before_summary['findings']} findings"
+        ),
+        "retest_label": (
+            f"{after_summary['failed_probes']} failed probes -> "
+            f"{after_summary['findings']} findings"
+        ),
+        "resolved_label": f"{resolved_finding_count} findings resolved",
+    }
+    # Readiness GATE state (Fix 5): when the gate stays BLOCKED even though the
+    # score improved, say so explicitly and name the blocking finding types — a
+    # positive delta is partial improvement, never a PASS.
+    gate = readiness_gate(report.readiness_state)
+    score_delta = report.after_score - report.before_score
+    gate_blocking_finding_types = sorted(unresolved_types)
+    gate_blocked_explanation = ""
+    gate_blocking_reason = ""
+    if gate == "BLOCKED":
+        reason_items = gate_blocking_finding_types or list(
+            report.human_review_requirements
+        )
+        if reason_items:
+            gate_blocking_reason = "Reason: " + ", ".join(reason_items) + " unresolved"
+        if score_delta > 0:
+            gate_blocked_explanation = (
+                "Readiness improved, but deployment remains blocked because "
+                "unsupported high-risk findings remain."
+            )
     # Human-review derivation: every final category tied to the unresolved retest
     # finding types/probe ids that support it (or flagged proposed_by_agent).
     human_review_derivation = remediation.derive_human_review_mapping(
@@ -480,12 +567,20 @@ def build_remediation_model(report) -> dict:
                 f"{getattr(meta, 'unresolved_finding_count', 0)} unresolved"
             ),
         },
-        "readiness_gate": readiness_gate(report.readiness_state),
+        "readiness_gate": gate,
         "readiness_gate_score": report.after_score,
         "after_score": report.after_score,
         "after_score_label": "Readiness gate score",
         "after_score_explanation": after_score_explanation,
         "blocking_explanation": explanation,
+        # Probe/finding count mapping (Fix 4) — explains why probe and finding
+        # counts differ.
+        "probe_finding_mapping": probe_finding_mapping,
+        # Readiness-gate blocking copy (Fix 5) — a positive delta with a BLOCKED
+        # gate is partial improvement, never a PASS.
+        "gate_blocked_explanation": gate_blocked_explanation,
+        "gate_blocking_reason": gate_blocking_reason,
+        "gate_blocking_finding_types": gate_blocking_finding_types,
     }
 
 
@@ -535,6 +630,8 @@ def build_report_summary_model(report) -> dict:
             "unresolved_finding_types": unresolved_types,
             "human_review_categories": human_review_categories,
         },
+        # The finding types that keep the deployment gate BLOCKED (Fix 5).
+        "gate_blocking_finding_types": unresolved_types,
         "why_not_pass": why_not_pass,
         # Demo copy shown only when the target is NOT marked safe.
         "summary_copy": "" if is_pass else _REPORT_SUMMARY_COPY,
@@ -643,13 +740,34 @@ def build_readiness_summary_model(report) -> dict:
             "Readiness remains blocked because high-risk findings remain. "
             "Remediation progress is shown separately."
         )
+    # Risk LEVEL that remains after retest (qualitative; never a numeric "risk
+    # score"). A 0 readiness score with high-severity findings is High/Critical.
+    risk_level = risk_level_from_results(report.after_results)
+    gate = readiness_gate(report.readiness_state)
+    score_delta = report.after_score - report.before_score
+    gate_blocked_explanation = ""
+    if gate == "BLOCKED" and score_delta > 0:
+        gate_blocked_explanation = (
+            "Readiness improved, but deployment remains blocked because "
+            "unsupported high-risk findings remain."
+        )
     return {
         "badge": format_readiness_badge(report.readiness_state),
-        "readiness_gate": readiness_gate(report.readiness_state),
+        "readiness_gate": gate,
         "before_score": report.before_score,
+        # The baseline score is a READINESS score (higher = safer), never a
+        # "risk score" (Fix 1).
+        "before_score_label": BASELINE_READINESS_SCORE_LABEL,
         "after_score": report.after_score,
         "after_score_label": "Readiness gate score",
         "after_score_explanation": after_score_explanation,
+        "readiness_score_explanation": READINESS_SCORE_EXPLANATION,
+        # Qualitative remaining-risk level (Critical/High/Medium/Low/None).
+        "risk_level": risk_level,
+        "risk_level_label": "Risk remaining",
+        "risk_color": _RISK_LEVEL_COLORS.get(risk_level, "red"),
+        # Gate-blocked-with-positive-delta copy (Fix 5).
+        "gate_blocked_explanation": gate_blocked_explanation,
         "remediation_progress": {
             "resolved": resolved_finding_count,
             "unresolved": unresolved_finding_count,

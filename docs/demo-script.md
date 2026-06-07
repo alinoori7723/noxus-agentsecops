@@ -78,7 +78,7 @@ Point at the open-risk line for `proprietary_context_exposure`.
 
 ## 7. Engineering proof (≈25s)
 
-> "Under the hood: release verification of 457 Python tests (plus 55 frontend tests), including 35 deterministic regression tests,
+> "Under the hood: release verification of 475 Python tests (plus 60 frontend tests), including 35 deterministic regression tests,
 > plus a Vitest frontend suite. Every LLM output is validated against Pydantic
 > schemas with one bounded repair attempt — failure routes to
 > `HUMAN_REVIEW_REQUIRED`. The loop is bounded at `MAX_TUNING_ITERATIONS = 2`. An

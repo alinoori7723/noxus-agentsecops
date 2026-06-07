@@ -712,6 +712,15 @@ def build_assessment_response(report, *, mode=None, provider_config=None) -> dic
         "unresolved_probe_count": getattr(rmeta, "unresolved_probe_count", 0),
         "resolved_finding_count": getattr(rmeta, "resolved_finding_count", 0),
         "unresolved_finding_count": getattr(rmeta, "unresolved_finding_count", 0),
+        # Probe/finding mapping counts (Fix 4) — one probe can emit multiple
+        # findings, so probe and finding counts differ. Exposed flatly so the
+        # report can explain the difference.
+        "baseline_probe_count": len(report.before_results),
+        "baseline_finding_count": baseline_findings,
+        "retest_failed_probe_count": sum(
+            1 for r in report.after_results if not r.passed
+        ),
+        "retest_finding_count": after_finding_count,
         "patched_policy_effective": getattr(rmeta, "patched_policy_effective", False),
         "patched_system_prompt_effective": getattr(
             rmeta, "patched_system_prompt_effective", False

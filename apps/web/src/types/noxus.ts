@@ -75,9 +75,19 @@ export interface ReadinessSummary {
   badge: ReadinessBadge;
   readiness_gate: string;
   before_score: number;
+  // The baseline score is a READINESS score (higher = safer), never a risk score.
+  before_score_label: string;
   after_score: number;
   after_score_label: string;
   after_score_explanation: string;
+  // Plain-language readiness-score direction copy ("Higher is safer …").
+  readiness_score_explanation: string;
+  // Qualitative remaining-risk level (Critical/High/Medium/Low/None).
+  risk_level: string;
+  risk_level_label: string;
+  risk_color: ChipColor;
+  // Positive-delta-but-BLOCKED copy (partial improvement, never a PASS).
+  gate_blocked_explanation: string;
   remediation_progress: RemediationProgress;
   score_delta: number;
   before_summary: ProbeSummary;
@@ -150,9 +160,27 @@ export interface PatchRow {
   primary_source_probe_id: string | null;
   primary_source_label: string;
   secondary_source_finding_ids: string[];
+  // Related findings: the causally-related subset of secondary links (same probe
+  // chain / category family). Unrelated cross-domain co-occurrences are excluded.
+  related_source_finding_ids: string[];
   source_label: string;
   status: PatchStatus;
   is_safety_rail: boolean;
+}
+
+export interface ProbeFindingMapping {
+  explanation: string;
+  baseline_probe_count: number;
+  baseline_failed_probe_count: number;
+  baseline_finding_count: number;
+  retest_probe_count: number;
+  retest_failed_probe_count: number;
+  retest_finding_count: number;
+  resolved_finding_count: number;
+  unresolved_finding_count: number;
+  baseline_label: string;
+  retest_label: string;
+  resolved_label: string;
 }
 
 export interface HumanReviewDerivationRow {
@@ -186,6 +214,12 @@ export interface RemediationModel {
   after_score_label: string;
   after_score_explanation: string;
   blocking_explanation: string;
+  // Probe/finding count mapping (one probe may emit multiple findings).
+  probe_finding_mapping: ProbeFindingMapping;
+  // Readiness-gate blocking copy (positive delta is partial improvement).
+  gate_blocked_explanation: string;
+  gate_blocking_reason: string;
+  gate_blocking_finding_types: string[];
 }
 
 export interface ReportSummary {
@@ -200,6 +234,7 @@ export interface ReportSummary {
     unresolved_finding_types: string[];
     human_review_categories: string[];
   };
+  gate_blocking_finding_types: string[];
   why_not_pass: string;
   summary_copy: string;
 }
