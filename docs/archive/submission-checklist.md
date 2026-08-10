@@ -81,7 +81,7 @@ docker run --rm -p 8787:8787 noxus-agentsecops:react-local
 - [ ] Final readiness is `CONDITIONAL_PASS`.
 
 ```bash
-PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src/noxus/samples/system_prompt.txt --policy src/noxus/samples/security_policy.yaml --business-context src/noxus/samples/business_context.md
+PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src/noxus/samples/system_prompt.txt --policy src/noxus/samples/security_policy.yaml --business-context src/noxus/samples/support_case_base.md
 ```
 
 ## UI
@@ -102,12 +102,12 @@ PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src
 
 ```bash
 mkdir -p outputs/audit
-PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src/noxus/samples/system_prompt.txt --policy src/noxus/samples/security_policy.yaml --business-context src/noxus/samples/business_context.md --audit-jsonl-output outputs/audit/readiness_reports.jsonl
+PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src/noxus/samples/system_prompt.txt --policy src/noxus/samples/security_policy.yaml --business-context src/noxus/samples/support_case_base.md --audit-jsonl-output outputs/audit/readiness_reports.jsonl
 ```
 
 ## Demo recording
 
-- [ ] ≤ 3 minutes, following `docs/demo-script.md`.
+- [ ] ≤ 3 minutes, following `docs/archive/demo-script.md`.
 - [ ] Shows failure-first, then patch, then `CONDITIONAL_PASS`.
 - [ ] Shows `[DETERMINISTIC SIMULATION]` label.
 - [ ] Shows proprietary-context exposure remaining as an open risk.
@@ -125,12 +125,12 @@ PYTHONPATH=src python3 -m noxus.cli run --mode deterministic --system-prompt src
 
 ## Challenge answers
 
-- [ ] `docs/challenge-application-draft.md` reviewed and finalized.
-- [ ] Positioning matches `docs/positioning.md` (no forbidden claims).
+- [ ] `docs/archive/challenge-application-draft.md` reviewed and finalized.
+- [ ] Positioning matches `docs/archive/positioning.md` (no forbidden claims).
 
 ## Known limitations
 
-- [ ] Limitations stated honestly (see README + `docs/positioning.md`):
+- [ ] Limitations stated honestly (see README + `docs/archive/positioning.md`):
   not a runtime firewall, not compliance certification, no production traffic
   interception, no real cloud SDK, proprietary-context exposure intentionally
   remains an open risk.

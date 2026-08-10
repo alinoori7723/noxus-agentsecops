@@ -1,7 +1,7 @@
-"""Noxus AgentSecOps — Milestone 1 deterministic local skeleton.
+"""Noxus AgentSecOps readiness assessment package.
 
-This package proves the full attack -> evaluate -> patch -> retest loop can run
-deterministically, without any LLM, network, or cloud dependency.
+This package implements an attack -> evaluate -> patch -> retest loop that can
+run deterministically, without an LLM, network, or cloud dependency.
 """
 
 from .constants import MAX_TUNING_ITERATIONS

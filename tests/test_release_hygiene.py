@@ -23,6 +23,7 @@ DOCKERFILE = PROJECT_ROOT / "Dockerfile"
 DOCKERIGNORE = PROJECT_ROOT / ".dockerignore"
 README = PROJECT_ROOT / "README.md"
 DOCS_DIR = PROJECT_ROOT / "docs"
+ARCHIVE_DIR = DOCS_DIR / "archive"
 TOP_HEADER = PROJECT_ROOT / "apps" / "web" / "src" / "components" / "TopHeader.tsx"
 SAFEGUARDS = PROJECT_ROOT / "apps" / "web" / "src" / "components" / "EngineeringSafeguards.tsx"
 
@@ -97,7 +98,7 @@ def test_docs_contain_current_final_test_counts():
     assert "live test count" not in readme.lower()
     # The submission/demo/challenge docs reference the current Python count.
     for name in ("submission-checklist.md", "challenge-application-draft.md", "demo-script.md"):
-        text = (DOCS_DIR / name).read_text(encoding="utf-8")
+        text = (ARCHIVE_DIR / name).read_text(encoding="utf-8")
         assert str(py) in text, f"{name} must reference the current Python count {py}"
 
 
@@ -174,7 +175,7 @@ def test_dockerfile_count_matches_release_metadata():
 def test_docs_count_matches_release_metadata():
     py = _dockerfile_py_count()
     for name in ("submission-checklist.md", "challenge-application-draft.md", "demo-script.md"):
-        text = (DOCS_DIR / name).read_text(encoding="utf-8")
+        text = (ARCHIVE_DIR / name).read_text(encoding="utf-8")
         assert str(py) in text, f"{name} must reference the release Python count {py}"
 
 

@@ -6,7 +6,7 @@ These read files only (no network, no docker, no venv)."""
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CHECKLIST = PROJECT_ROOT / "docs" / "submission-checklist.md"
+CHECKLIST = PROJECT_ROOT / "docs" / "archive" / "submission-checklist.md"
 SCRIPT = PROJECT_ROOT / "scripts" / "final_release_validate.sh"
 
 SMOKE_CONTAINER = "noxus-edge-smoke"

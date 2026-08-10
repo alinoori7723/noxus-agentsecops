@@ -36,7 +36,7 @@ RUN useradd --create-home --uid 1000 noxus_user
 WORKDIR /app
 
 # Install the backend package (pulls pydantic, PyYAML, fastapi, uvicorn).
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 

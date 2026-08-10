@@ -1,7 +1,7 @@
 """LLM provider abstraction for local LiteLLM-compatible usage.
 
-Milestone 2 uses ONLY the Python standard library for HTTP (urllib). No official
-provider SDKs, no requests/httpx, no cloud clients. The default provider speaks
+The runtime uses only the Python standard library for HTTP (urllib): no official
+provider SDKs, requests/httpx, or cloud clients. The default provider speaks
 the OpenAI-style ``/v1/chat/completions`` wire format exposed by a local
 LiteLLM gateway.
 

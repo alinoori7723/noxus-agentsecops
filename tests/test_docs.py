@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 README = PROJECT_ROOT / "README.md"
 DOCKERFILE = PROJECT_ROOT / "Dockerfile"
 DOCS_DIR = PROJECT_ROOT / "docs"
+ARCHIVE_DIR = DOCS_DIR / "archive"
 
 DOC_FILES = [README] + sorted(DOCS_DIR.glob("*.md"))
 
@@ -41,7 +42,7 @@ def test_docs_reference_react_fastapi_and_8787():
         assert token in readme, f"README missing {token!r}"
     # The submission/demo docs should point at the new port.
     for name in ("submission-checklist.md", "demo-script.md"):
-        text = (DOCS_DIR / name).read_text(encoding="utf-8")
+        text = (ARCHIVE_DIR / name).read_text(encoding="utf-8")
         assert "8787" in text, f"{name} should reference port 8787"
 
 
@@ -78,10 +79,10 @@ def test_docs_test_count_matches_declared_count():
 # --------------------------------------------------------------------------- #
 # Product positioning: bounded audit/remediation-readiness, not full autonomy
 # --------------------------------------------------------------------------- #
-POSITIONING = DOCS_DIR / "positioning.md"
-DEMO = DOCS_DIR / "demo-script.md"
-CHALLENGE = DOCS_DIR / "challenge-application-draft.md"
-CHECKLIST = DOCS_DIR / "submission-checklist.md"
+POSITIONING = ARCHIVE_DIR / "positioning.md"
+DEMO = ARCHIVE_DIR / "demo-script.md"
+CHALLENGE = ARCHIVE_DIR / "challenge-application-draft.md"
+CHECKLIST = ARCHIVE_DIR / "submission-checklist.md"
 OVERVIEW = PROJECT_ROOT / "apps" / "web" / "src" / "components" / "Overview.tsx"
 
 # Customer-facing surfaces. positioning.md is the INTERNAL guardrail doc whose

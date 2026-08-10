@@ -1,4 +1,4 @@
-"""Schema-bound LLM agents for Milestone 2.
+"""Schema-bound LLM agents for optional agent-assisted assessments.
 
 Three agents propose structured objects only:
 - RedTeamAgent     -> list[Probe]      (via ProbeBatch)
@@ -42,7 +42,7 @@ SEMANTIC_JUDGE_PROBE_TYPES = (
 )
 
 # Markers that indicate an LLM tried to "fix" proprietary-context exposure.
-# Milestone 2 has no approved auto-mapping for it, so such patches are stripped
+# There is no approved auto-mapping for it, so such patches are stripped
 # (treated as human-review-only) and never applied.
 _PROPRIETARY_MARKERS = {
     "proprietary_context_exposure",

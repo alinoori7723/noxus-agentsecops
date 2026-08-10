@@ -1,4 +1,4 @@
-"""Shared in-memory fixtures for Milestone 2 tests (not collected by pytest).
+"""Shared in-memory fixtures for agent-layer tests (not collected by pytest).
 
 No network, no real credentials — everything here drives FakeLLMProvider.
 """

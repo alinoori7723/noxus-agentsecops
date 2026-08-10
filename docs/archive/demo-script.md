@@ -26,7 +26,7 @@ Open the **Target Configuration** panel and show the three inputs:
 - `system_prompt.txt` — a normal support-bot business prompt.
 - `security_policy.yaml` — **intentionally weak** (empty masks, indirect
   injection detection off, no human-review categories).
-- `business_context.md` — documentation-only context.
+- `support_case_base.md` — documentation-only context.
 
 > "We're testing a deliberately weak configuration so you can see the loop work."
 

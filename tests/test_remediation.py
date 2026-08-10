@@ -388,7 +388,7 @@ def test_sample_inputs_do_not_use_legacy_business_context():
     s = api_core.sample_inputs()
     base = (_SAMPLES / "support_case_base.md").read_text(encoding="utf-8")
     assert s["business_context"] == base
-    # The obsolete Milestone-1 documentation-only marker is gone from runtime.
+    # The obsolete documentation-only sample is gone from runtime.
     assert "MUST NOT drive any deterministic security decision" not in s["business_context"]
 
 

@@ -1,4 +1,4 @@
-# Intentionally weak baseline security policy for the Milestone 1 demo.
+# Intentionally weak baseline security policy for the deterministic demo.
 sensitive_data:
   block:
     - api_key

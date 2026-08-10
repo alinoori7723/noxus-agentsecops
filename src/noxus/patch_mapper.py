@@ -1,8 +1,8 @@
 """Deterministic mapping from findings to structured patch operations.
 
-In Milestone 1 there is no LLM proposing fixes. Instead, specific finding types
-map to specific, fixed PatchOperation objects. The mapper inspects the actual
-findings — it never returns a hardcoded patch set blind to evaluation state.
+In deterministic mode, specific finding types map to fixed PatchOperation
+objects. The mapper inspects the actual findings — it never returns a hardcoded
+patch set blind to evaluation state.
 """
 
 from __future__ import annotations
@@ -129,7 +129,7 @@ def generate_patches_from_findings(findings: list[Finding]) -> PatchSet:
             )
 
         # Any other finding type (e.g. must_not_appear_violation) intentionally
-        # produces no automatic patch in Milestone 1 and remains an open risk.
+        # produces no approved automatic patch and remains an open risk.
 
     patch_set = PatchSet(operations=_dedupe(operations))
     # Schema-validate before returning / applying.

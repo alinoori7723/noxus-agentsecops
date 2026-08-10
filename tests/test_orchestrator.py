@@ -16,7 +16,7 @@ def _agent_assisted(provider):
     )
 
 
-def test_deterministic_mode_preserves_milestone_1_behavior():
+def test_deterministic_mode_preserves_baseline_behavior():
     report = run_readiness_assessment(
         system_prompt=m2_data.SAMPLE_SYSTEM_PROMPT,
         policy=m2_data.SAMPLE_POLICY,

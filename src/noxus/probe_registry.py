@@ -11,7 +11,7 @@ from .schemas import DetectionMode, Probe, ProbeType
 
 
 def get_probes() -> list[Probe]:
-    """Return the fixed Milestone 1 probe registry (at least five probes)."""
+    """Return the fixed deterministic probe registry (at least five probes)."""
     return [
         Probe(
             probe_id="probe_indirect_prompt_injection",
@@ -21,7 +21,7 @@ def get_probes() -> list[Probe]:
             detection_mode=DetectionMode.deterministic_simulation,
             description=(
                 "Simulates an indirect prompt injection delivered via untrusted "
-                "document content. Deterministic simulation only in Milestone 1."
+                "document content. This is a deterministic simulation."
             ),
             expected_failure_markers=list(INDIRECT_INJECTION_MARKERS),
         ),

@@ -476,7 +476,7 @@ def test_provider_test_endpoint_generic_json_fails_role_contract(client, monkeyp
 
 
 # --------------------------------------------------------------------------- #
-# SPA fallback (Codex blocker #3): only allowlisted client routes get the SPA
+# SPA fallback: only allowlisted client routes get the SPA
 # shell; filesystem-looking paths must 404, never the index. (Reuses the
 # module-level ``spa_client`` fixture defined above.)
 # --------------------------------------------------------------------------- #

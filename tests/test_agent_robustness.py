@@ -246,8 +246,8 @@ def test_policy_tuning_rejects_unsafe_target_even_after_repair():
 
 
 # --------------------------------------------------------------------------- #
-# Policy-tuning PATH validation (Codex blocker #2): no traversal / no arbitrary
-# policy key / no file-path-looking path can reach the deterministic engine.
+# Policy-tuning path validation: no traversal, arbitrary target, or file-like
+# policy key can reach the deterministic engine.
 # --------------------------------------------------------------------------- #
 def _tuning_patch(path):
     return json.dumps(

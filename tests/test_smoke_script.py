@@ -1,4 +1,4 @@
-"""Static safety checks for the live smoke tooling (Codex blocker #4).
+"""Static safety checks for the live smoke tooling.
 
 The logic now lives in scripts/smoke_agent_assisted_live.py with a thin bash
 wrapper scripts/smoke_agent_assisted_live.sh. These are static-text/structure

@@ -1,7 +1,7 @@
 """Orchestration layer for deterministic and agent-assisted readiness runs.
 
-The deterministic mode preserves Milestone 1 behavior exactly. The
-agent-assisted mode layers schema-bound LLM agents on top, but the deterministic
+The deterministic mode provides the stable regression baseline. The
+agent-assisted mode layers schema-bound LLM agents on top, while the deterministic
 patch engine remains the ONLY component allowed to apply patches, and the
 deterministic evaluator is always run (agents supplement, never replace it).
 
@@ -110,7 +110,7 @@ def run_readiness_assessment(
 
 
 # --------------------------------------------------------------------------- #
-# Deterministic mode (Milestone 1 behavior, unchanged)
+# Deterministic mode
 # --------------------------------------------------------------------------- #
 def _run_deterministic(
     system_prompt: str, policy: Any, business_context_text: str

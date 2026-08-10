@@ -2,7 +2,7 @@
 
 Statically scans the implementation source tree (via ``ast``, inspecting only
 import nodes) and the project metadata (``pyproject.toml``) to prove that no
-Milestone 2 / out-of-scope modules or dependencies have been introduced.
+out-of-scope modules or dependencies have been introduced.
 
 Comments, docstrings, and arbitrary string literals are intentionally NOT
 scanned, so future planning notes mentioning these names cannot cause false
@@ -17,7 +17,7 @@ SRC_DIR = PROJECT_ROOT / "src" / "noxus"
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 # fastapi/uvicorn are the authorized web-API dependencies for the React
-# replacement phase; their isolation to api_server.py is enforced separately in
+# architecture; their isolation to api_server.py is enforced separately in
 # test_ui_scope_guard.py. streamlit is now out of scope (the Streamlit UI was
 # removed in favor of the React frontend).
 FORBIDDEN_MODULES = {
@@ -57,7 +57,7 @@ def _is_forbidden(module: str) -> str | None:
     return None
 
 
-def test_no_milestone_2_scope_code_present():
+def test_no_out_of_scope_code_present():
     # 1. Statically scan every implementation source file.
     py_files = sorted(SRC_DIR.rglob("*.py"))
     assert py_files, "Expected to find implementation source files to scan."

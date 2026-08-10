@@ -116,8 +116,8 @@ def _render_state(title: str, results: list[ProbeResult]) -> list[str]:
 def render_cli_report(report: ReadinessReport) -> str:
     """Render the human-visible CLI report (honest labeling included)."""
     lines: list[str] = []
-    lines.append("Noxus AgentSecOps — Milestone 1 Readiness Report")
-    lines.append(f"milestone: {report.metadata.milestone}")
+    lines.append("Noxus AgentSecOps — Readiness Report")
+    lines.append(f"assessment_profile: {report.metadata.milestone}")
     lines.append(
         f"business_context_used_for: {report.metadata.business_context_used_for}"
     )

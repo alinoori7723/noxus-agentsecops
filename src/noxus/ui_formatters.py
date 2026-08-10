@@ -432,7 +432,7 @@ _NO_SAFETY_RAIL_PREVIEW = "No safety rail preview available from report data"
 def _safety_rail_preview(report) -> str:
     """Derive the safety-rail preview from REAL execution data only.
 
-    Priority order (per Milestone 3 data-integrity rule):
+    Priority order for deterministic data integrity:
       A. the actual patched system prompt captured on the report
          (parsed via extract_safety_rail_preview);
       B. the actual clause text from the applied

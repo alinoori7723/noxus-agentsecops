@@ -1,4 +1,4 @@
-"""Strict Pydantic v2 schemas for the Noxus AgentSecOps Milestone 1 skeleton.
+"""Strict Pydantic v2 schemas for Noxus AgentSecOps.
 
 Everything here is deterministic data: policies, probes, findings, patches and
 reports. No runtime behavior, no LLM, no network.
@@ -34,8 +34,7 @@ class Severity(str, Enum):
 class DetectionMode(str, Enum):
     deterministic = "deterministic"
     deterministic_simulation = "deterministic_simulation"
-    # NOTE: semantic_llm exists for forward compatibility only. Milestone 1 must
-    # never use it during actual execution.
+    # Deterministic mode never uses semantic_llm during actual execution.
     semantic_llm = "semantic_llm"
 
 
@@ -133,7 +132,7 @@ class Finding(BaseModel):
     evidence: str
     evidence_source: str
     remediation_target: list[str] = Field(default_factory=list)
-    # Milestone 3 (display telemetry only): present for semantic-judge findings so
+    # Display telemetry for semantic-judge findings so
     # the UI can show the judge's confidence. Defaults to None for deterministic
     # findings; does not affect evaluator/agent/patch behavior or scoring.
     confidence: Optional[Confidence] = None
@@ -151,7 +150,7 @@ class ProbeResult(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Milestone 2 — agent layer schemas (schema-bound LLM outputs)
+# Agent-layer schemas (schema-bound LLM outputs)
 # --------------------------------------------------------------------------- #
 class ProbeBatch(BaseModel):
     """A schema-bound batch of probes proposed by the Red Team Agent."""
@@ -240,9 +239,11 @@ class ReportMetadata(BaseModel):
 
     business_context_text: str = ""
     business_context_used_for: str = "documentation_only"
-    milestone: str = "milestone_1_deterministic_skeleton"
-    # Milestone 2: which orchestration mode produced this report, and how many
-    # bounded tuning iterations ran (0 in pure deterministic mode).
+    # The legacy field name is retained for report compatibility; the value
+    # identifies the current assessment profile rather than a development phase.
+    milestone: str = "noxus_readiness_v1"
+    # Which orchestration mode produced this report, and how many bounded tuning
+    # iterations ran (0 in pure deterministic mode).
     mode: str = "deterministic"
     tuning_iterations: int = 0
     # Presentation-only telemetry for an agent-assisted schema-contract failure.
@@ -334,7 +335,7 @@ class ReadinessReport(BaseModel):
     open_risks: list[str] = Field(default_factory=list)
     human_review_requirements: list[str] = Field(default_factory=list)
     metadata: ReportMetadata = Field(default_factory=ReportMetadata)
-    # Milestone 3 (presentation telemetry only, backward-compatible): the real
+    # Backward-compatible presentation telemetry: the real
     # patched system prompt produced by the deterministic patch engine during
     # the run. Used by the UI to render an HONEST safety-rail preview. Defaults
     # to None; does not affect scoring, readiness, evaluator, agent, or patch

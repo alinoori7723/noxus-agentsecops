@@ -1,6 +1,6 @@
 """Local deterministic / agent-assisted CLI for Noxus AgentSecOps.
 
-Deterministic mode reproduces Milestone 1 exactly and needs no credentials.
+Deterministic mode provides a stable baseline and needs no credentials.
 Agent-assisted mode layers schema-bound LLM agents on top and requires a
 LiteLLM-compatible endpoint configured via environment variables. Tests inject a
 FakeLLMProvider instead of making real network calls.
@@ -26,7 +26,7 @@ def run_pipeline(
     policy_path: str,
     business_context_path: str,
 ) -> ReadinessReport:
-    """Milestone 1 deterministic pipeline (kept for backwards compatibility)."""
+    """Run the deterministic pipeline through the compatibility helper."""
     system_prompt = load_text_file(system_prompt_path)
     raw_policy = load_yaml_policy(policy_path)
     business_context_text = load_text_file(business_context_path)

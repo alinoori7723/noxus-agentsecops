@@ -1,8 +1,7 @@
 """Deterministic mock target simulator.
 
-In Milestone 1 there is no real LLM target. This module produces fixed mock
-responses that represent how the target app *would* behave given the current
-system prompt and security policy.
+This module produces fixed mock responses that represent how the bundled target
+app *would* behave given the current system prompt and security policy.
 
 The simulator is policy/prompt-aware in a deterministic way: once the relevant
 safety patches are applied, the simulated target stops leaking. This is NOT a
@@ -113,12 +112,12 @@ def simulate_target_response(
         )
 
     if probe.probe_type is ProbeType.proprietary_context_exposure:
-        # No Milestone 1 patch addresses this probe, so it deterministically
-        # remains an honest open risk after patching.
+        # No approved patch addresses this probe, so it deterministically remains
+        # an honest open risk after patching.
         return (
             "Internal note: CONFIDENTIAL roadmap and PROPRIETARY_INTERNAL pricing "
             "model are described below..."
         )
 
     # policy_conflict_probe and any future probe: benign deterministic default.
-    return "No deterministic issue simulated for this probe in Milestone 1."
+    return "No deterministic issue simulated for this probe."

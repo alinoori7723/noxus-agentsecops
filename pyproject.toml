@@ -1,13 +1,24 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "noxus-agentsecops"
 version = "0.1.0"
-description = "Noxus AgentSecOps — AI Security Readiness Tester for LLM Apps (Milestone 1 deterministic skeleton)"
+description = "Fail-closed AgentSecOps testbed for evaluating and tuning security controls around LLM application execution"
 readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "Ali Noori", email = "62625540+alinoori7723@users.noreply.github.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+]
 dependencies = [
     "pydantic>=2.5",
     "PyYAML>=6.0",
@@ -26,6 +37,12 @@ dev = [
 [project.scripts]
 noxus = "noxus.cli:main"
 noxus-api = "noxus.api_server:main"
+
+[project.urls]
+Homepage = "https://github.com/alinoori7723/noxus-agentsecops"
+Repository = "https://github.com/alinoori7723/noxus-agentsecops"
+Issues = "https://github.com/alinoori7723/noxus-agentsecops/issues"
+Documentation = "https://github.com/alinoori7723/noxus-agentsecops/tree/main/docs"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

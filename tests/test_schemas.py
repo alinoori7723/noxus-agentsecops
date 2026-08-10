@@ -96,4 +96,4 @@ def test_report_metadata_includes_business_context_documentation_only():
     report = ReadinessReport(metadata=meta)
     assert report.metadata.business_context_text == "hello world"
     assert report.metadata.business_context_used_for == "documentation_only"
-    assert report.metadata.milestone == "milestone_1_deterministic_skeleton"
+    assert report.metadata.milestone == "noxus_readiness_v1"
