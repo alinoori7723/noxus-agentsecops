@@ -1,0 +1,72 @@
+name: Security
+
+on:
+  push:
+    branches: [main, codex/public-release-hardening]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dependencies:
+    name: Locked dependency audits
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.10.9"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+      - run: uv sync --frozen --extra dev
+      - run: mkdir -p reports
+      - run: uv export --frozen --extra dev --no-emit-project --format requirements-txt --output-file reports/python-audit-requirements.txt
+      - run: uv run --frozen --extra dev pip-audit --require-hashes --disable-pip -r reports/python-audit-requirements.txt --format json --output reports/pip-audit.json
+      - run: npm ci --prefix apps/web
+      - run: npm audit --prefix apps/web --json > reports/npm-audit.json
+      - run: npm audit --prefix apps/web --omit=dev --json > reports/npm-audit-production.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: dependency-audit-evidence
+          path: reports/
+          if-no-files-found: error
+
+  container:
+    name: Secrets, filesystem and container
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - run: bash scripts/install_security_tools.sh "$RUNNER_TEMP/security-tools"
+      - run: echo "$RUNNER_TEMP/security-tools" >> "$GITHUB_PATH"
+      - run: mkdir -p reports
+      - run: gitleaks git . --log-opts=HEAD --redact --report-format json --report-path reports/gitleaks.json
+      - run: trivy fs --scanners vuln,misconfig --skip-dirs .git --format json --output reports/trivy-filesystem.json .
+      - run: python3 scripts/check_trivy.py reports/trivy-filesystem.json
+      - run: docker build --pull --tag noxus:ci .
+      - run: python3 scripts/container_smoke.py noxus:ci
+      - run: trivy image --scanners vuln --format json --output reports/trivy-image.json noxus:ci
+      - run: python3 scripts/check_trivy.py reports/trivy-image.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: container-security-evidence
+          path: reports/
+          if-no-files-found: error
